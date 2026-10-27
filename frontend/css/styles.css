@@ -174,6 +174,100 @@ kbd {
   pointer-events: none;
 }
 
+.intro-splash {
+  cursor: default;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(30, 110, 147, .34), transparent 25rem),
+    linear-gradient(155deg, rgba(4, 20, 35, .97), rgba(2, 8, 24, .98));
+  transition-duration: 500ms;
+}
+
+.intro-splash::before,
+.intro-splash::after {
+  content: "";
+  position: absolute;
+  width: min(62vw, 540px);
+  aspect-ratio: 1;
+  border: 1px solid rgba(105, 215, 232, .12);
+  border-radius: 50%;
+  box-shadow: 0 0 70px rgba(56, 189, 248, .05), inset 0 0 70px rgba(56, 189, 248, .04);
+  animation: intro-breathe 3.2s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.intro-splash::after {
+  width: min(78vw, 700px);
+  opacity: .55;
+  animation-delay: -.8s;
+}
+
+.intro-splash .welcome-modal {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  animation: intro-arrive 1.1s cubic-bezier(.2,.8,.2,1) both;
+}
+
+.intro-splash .welcome-sonar-emblem {
+  width: 76px;
+  height: 76px;
+  margin-bottom: 1.5rem;
+  filter: drop-shadow(0 0 22px rgba(56, 189, 248, .38));
+}
+
+.intro-ripple-logo { overflow: visible; }
+.intro-logo-center { fill: #a5f3fc; filter: drop-shadow(0 0 7px rgba(105, 215, 232, .9)); }
+.intro-logo-ring { fill: none; stroke: rgba(125, 211, 252, .82); stroke-width: 1.15; transform-origin: 40px 40px; animation: logo-ripple 2.4s ease-out infinite; }
+.ring-b { animation-delay: .8s; }
+.ring-c { animation-delay: 1.6s; }
+
+.intro-kicker {
+  margin-bottom: .55rem;
+  color: var(--sonar-pulse);
+  font: 500 .72rem var(--font-mono);
+  letter-spacing: .22em;
+}
+
+.intro-splash .welcome-title {
+  font-size: clamp(2.1rem, 5vw, 3.2rem);
+  font-weight: 400;
+  letter-spacing: -.035em;
+}
+
+.intro-splash .welcome-subtitle {
+  margin-top: .4rem;
+  color: #b3cad6;
+  font-size: 1rem;
+}
+
+.intro-caption {
+  margin-top: 1.2rem;
+  color: rgba(179, 202, 214, .68);
+  font-size: .76rem;
+  letter-spacing: .06em;
+}
+
+.intro-audio-button {
+  margin: 1.25rem auto 0;
+  padding: .65rem 1rem;
+  border: 1px solid rgba(125, 211, 252, .45);
+  border-radius: 999px;
+  color: #e0f2fe;
+  background: rgba(56, 189, 248, .1);
+  font: 500 .82rem var(--font-sans);
+  cursor: pointer;
+}
+.intro-audio-button:hover { background: rgba(56, 189, 248, .2); }
+
+@keyframes logo-ripple { 0% { transform: scale(.2); opacity: 0; } 16% { opacity: .85; } 100% { transform: scale(1.8); opacity: 0; } }
+@keyframes intro-breathe { to { transform: scale(1.12); opacity: .55; } }
+@keyframes intro-arrive {
+  from { opacity: 0; transform: translateY(12px) scale(.97); filter: blur(8px); }
+  to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+
 .welcome-modal {
   max-width: 640px;
   width: 100%;
@@ -207,7 +301,7 @@ kbd {
   color: var(--biolum-blue);
 }
 
-.whale-sonar-svg {
+.welcome-logo-svg {
   width: 100%;
   height: 100%;
 }
@@ -1200,23 +1294,20 @@ body {
 .ocean-waves-svg { opacity: .42; filter: blur(2px); }
 .wave-1 { fill: rgba(18,60,89,.24); }
 .wave-2 { fill: rgba(30,103,124,.12); }
-.ocean-light, .ocean-current, .ocean-ripple, .distant-whale { position: absolute; pointer-events:none; }
+.ocean-light, .ocean-current, .ocean-ripple { position: absolute; pointer-events:none; }
 .ocean-light { border-radius: 50%; filter: blur(55px); mix-blend-mode: screen; }
 .ocean-light-one { width: 55vw; height: 38vw; top: -23vw; left: 9vw; background: radial-gradient(ellipse, rgba(44,147,174,.19), transparent 68%); animation: light-drift 38s ease-in-out infinite alternate; }
 .ocean-light-two { width: 52vw; height: 42vw; right: -22vw; bottom: 3vh; background: radial-gradient(ellipse, rgba(20,90,126,.18), transparent 68%); animation: light-drift 47s ease-in-out infinite alternate-reverse; }
 .ocean-current { width: 110vw; height: 34vh; left: -8vw; border-radius: 50%; border-top: 1px solid rgba(105,215,232,.08); border-bottom: 1px solid rgba(105,215,232,.035); transform: rotate(-9deg); filter: blur(7px); }
 .current-one { top: 30vh; animation: current-drift 58s ease-in-out infinite alternate; }
 .current-two { top: 58vh; left: 15vw; transform: rotate(7deg); opacity: .55; animation: current-drift 72s ease-in-out infinite alternate-reverse; }
-.ocean-ripple { width: 360px; height: 360px; right: 10%; top: 23%; }
-.ripple-two { left: 7%; top: 69%; transform: scale(.66); }
-.ocean-ripple i { position:absolute; inset:0; border:1px solid rgba(105,215,232,.11); border-radius:50%; animation: sonar-expand 13s ease-out infinite; }
-.ocean-ripple i:nth-child(2) { animation-delay:4.3s; }
-.ocean-ripple i:nth-child(3) { animation-delay:8.6s; }
-.distant-whale { width:clamp(130px, 17vw, 250px); color:rgba(154,234,241,.12); top:30%; left:-20%; filter:blur(.2px); animation: whale-glide 88s linear infinite; }
+.ocean-ripple { width:max(100vw, 100vh); height:max(100vw, 100vh); left:50%; top:50%; transform:translate(-50%,-50%); }
+.ocean-ripple i { position:absolute; inset:0; border:1px solid rgba(105,215,232,.32); border-radius:50%; box-shadow:0 0 16px rgba(56,189,248,.1), inset 0 0 12px rgba(56,189,248,.08); animation: sonar-expand 24s ease-out infinite; }
+.ocean-ripple i:nth-child(2) { animation-delay:8s; }
+.ocean-ripple i:nth-child(3) { animation-delay:16s; }
 @keyframes light-drift { to { transform: translate3d(7vw, 4vh, 0) scale(1.08); opacity:.65; } }
 @keyframes current-drift { to { transform: translate3d(5vw,-3vh,0) rotate(-5deg); } }
-@keyframes sonar-expand { 0% { transform:scale(.24); opacity:0; } 12% { opacity:.75; } 100% { transform:scale(1); opacity:0; } }
-@keyframes whale-glide { 0% { transform:translateX(0) translateY(0); } 45% { transform:translateX(70vw) translateY(-14px); } 50% { transform:translateX(78vw) translateY(-12px) scaleX(-1); } 95% { transform:translateX(4vw) translateY(8px) scaleX(-1); } 100% { transform:translateX(0) translateY(0); } }
+@keyframes sonar-expand { 0% { transform:scale(.025); opacity:0; } 12% { opacity:.75; } 100% { transform:scale(1.35); opacity:0; } }
 
 .app-header { background:rgba(4,19,33,.72); border-image:none; border-bottom:1px solid rgba(165,188,203,.1); padding: .75rem clamp(1rem,4vw,3.5rem); }
 .brand-title { font-family:var(--font-sans); letter-spacing:.18em; font-size:1.25rem; }
@@ -1257,6 +1348,9 @@ kbd { background:rgba(11,38,59,.8); border:1px solid rgba(165,188,203,.16); box-
 .sentence-span.active-sentence { background:rgba(105,215,232,.14); border-left:0; box-shadow:inset 0 -1px rgba(105,215,232,.54); color:#f4fbfd; font-weight:500; }
 .progress-bar-track { height:3px; border:0; background:rgba(165,188,203,.13); }
 .progress-bar-fill { background:var(--biolum-blue); animation:none; }
+.section-seek-label { display:flex; justify-content:space-between; color:var(--echo-dim); font-size:.78rem; margin-top:.35rem; }
+.section-seek { width:100%; min-height:24px; accent-color:var(--biolum-blue); cursor:pointer; }
+.section-seek:disabled { cursor:default; opacity:.45; }
 .output-card { background:transparent; padding:0 clamp(1rem,2vw,1.7rem); gap:.85rem; }
 .section-heading { font:400 1.35rem var(--font-display); text-transform:none; letter-spacing:0; color:var(--whale-glow); }
 .lang-mini-badge { border:0; background:transparent; color:var(--echo-dim); font:500 .8rem var(--font-sans); }
@@ -1318,6 +1412,7 @@ kbd { background:rgba(11,38,59,.8); border:1px solid rgba(165,188,203,.16); box-
   .mic-card { min-height:0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ocean-light, .ocean-current, .ocean-ripple i, .distant-whale { animation:none!important; }
-  .distant-whale { left:55%; opacity:.5; }
+  .ocean-light, .ocean-current, .ocean-ripple i { animation:none!important; }
+  .intro-splash::before, .intro-splash::after, .intro-logo-ring { animation:none!important; }
+  .intro-logo-ring { opacity:.4; transform:scale(1); }
 }

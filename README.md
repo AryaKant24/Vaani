@@ -27,15 +27,19 @@ Available voices are `Nalini` and `Mohan`.
 
 ## User flow
 
-1. Start Vani and activate the welcome guide.
+1. Let the three-second ripple splash play, then listen to Vani’s spoken introduction.
 2. Upload a text-based PDF with `U`, or use the built-in sample chapter.
-3. Listen to sentence-by-sentence reading.
+3. Press `S` to start sentence-by-sentence reading.
 4. Press `Space` to pause and record a doubt; press it again to submit.
 5. Vani transcribes the question, explains it in the selected language, speaks
    the answer, and restarts the interrupted sentence.
 
-Shortcuts: `P` pause/resume, `Up`/`Down` change language, `Left`/`Right` change
-paragraph, and `U` upload a PDF.
+Vani opens with a short three-second water sound and ripple animation, then plays
+the spoken introduction. Book reading stays paused until you press `S`. Shortcuts: `A`/`D`
+move to the previous or next paragraph, `S` pause/resume, `F` cycle the doubt
+language, `H` replay the spoken guide, and `U` upload a PDF. Changing the language
+leaves reading paused; press `S` when you are ready to continue. Use the paragraph
+slider to jump directly to a paragraph. `Space` pauses reading to ask or send a doubt.
 
 ## Technical flow
 

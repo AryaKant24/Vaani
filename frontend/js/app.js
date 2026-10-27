@@ -13,6 +13,7 @@ import {
 } from "./api.js";
 import {
   playEarcon,
+  playBootWaterSound,
   stopAssistantAudio,
   pauseBookStream,
   playBookChunkBase64,
@@ -30,26 +31,83 @@ import {
   renderDoubtAnswer
 } from "./ui.js";
 
+let bootSequenceFinished = false;
+let openingGuideStarted = false;
+
 window.addEventListener("DOMContentLoaded", async () => {
-  // 1. Bind UI and Keyboard events FIRST so the Welcome Overlay always closes on click/space
   bindUIEvents();
   bindKeyboardController();
+  void runBootSequence();
 
   // 2. Load session state and verify LLM connection
   try {
     store.serverData = await fetchSessionState();
     renderReaderView(false);
+    maybePlayOpeningGuide();
 
     const llmCheck = await checkLlmConnection();
-    if (!llmCheck.connected) {
+    if (!llmCheck.connected && !store.isPlayingWelcome) {
       setStatusBadge("Voice assistance is temporarily unavailable. You can continue reading.", "error");
-    } else {
+    } else if (llmCheck.connected && !store.isPlayingWelcome) {
       setStatusBadge(`System Ready • LLM Connected (${llmCheck.model})`, "idle");
     }
   } catch (err) {
     setStatusBadge("VANI could not connect to the reading service. Please refresh to try again.", "error");
   }
 });
+
+async function runBootSequence() {
+  let soundStarted = await playBootWaterSound();
+  if (!soundStarted) {
+    const caption = document.getElementById("introCaption");
+    const soundButton = document.getElementById("btnStartWithSound");
+    if (caption) caption.textContent = "Your browser needs a quick gesture to play sound.";
+    soundButton?.classList.remove("hidden");
+    soundButton?.focus();
+    await waitForSoundGesture(soundButton);
+    soundButton?.classList.add("hidden");
+    soundStarted = await playBootWaterSound();
+    if (caption) {
+      caption.textContent = soundStarted
+        ? "A moment of calm before you begin"
+        : "Opening your reading space.";
+    }
+  }
+
+  await new Promise((resolve) => window.setTimeout(resolve, 3000));
+  store.appInitialized = true;
+  store.isPlayingWelcome = true;
+  bootSequenceFinished = true;
+  hideWelcomeOverlay();
+  maybePlayOpeningGuide();
+}
+
+function waitForSoundGesture(button) {
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      window.removeEventListener("keydown", onKeyDown);
+      button?.removeEventListener("click", onClick);
+    };
+    const onKeyDown = (event) => {
+      if (["Tab", "Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
+      event.preventDefault();
+      cleanup();
+      resolve();
+    };
+    const onClick = () => {
+      cleanup();
+      resolve();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    button?.addEventListener("click", onClick);
+  });
+}
+
+function maybePlayOpeningGuide() {
+  if (!bootSequenceFinished || openingGuideStarted || !store.serverData.welcome_script) return;
+  openingGuideStarted = true;
+  replayWelcomeGuide();
+}
 
 function getSelectedVoice() {
   return document.getElementById("voiceSelect")?.value || "Nalini";
@@ -183,28 +241,26 @@ async function speakSystemAnnouncement(text, onComplete = null, isWelcome = fals
   }
 }
 
-async function initializeAppAndStart() {
-  if (store.appInitialized) return;
-  store.appInitialized = true;
-  hideWelcomeOverlay();
-  playEarcon(440, 660, 0.14);
-
-  setStatusBadge("Playing Welcome Guide • Press Spacebar to Skip to Book", "reading");
-  await speakSystemAnnouncement(
-    store.serverData.welcome_script,
-    async () => {
-      await startReadingCurrentSentence();
-    },
-    true
-  );
+async function replayWelcomeGuide() {
+  if (!store.appInitialized) return;
+  pauseBookStream(0);
+  stopAssistantAudio();
+  store.isReadingBook = false;
+  store.isBookPausedForDoubt = false;
+  store.isPlayingWelcome = true;
+  renderReaderView(false);
+  setStatusBadge("Playing Welcome Guide • Press Space to Skip to Book", "reading");
+  await speakSystemAnnouncement(store.serverData.welcome_script, () => {
+    setStatusBadge("Guide finished • Reading paused; press S to start", "idle");
+  }, true);
 }
 
 async function cycleLanguage(direction) {
-  const wasReading = store.isReadingBook;
-  if (wasReading) {
-    pauseBookStream(0);
-    store.isReadingBook = false;
-  }
+  pauseBookStream(0);
+  stopAssistantAudio();
+  store.isReadingBook = false;
+  store.isPlayingWelcome = false;
+  store.isBookPausedForDoubt = false;
 
   store.currentLangIdx =
     (store.currentLangIdx + direction + LANGUAGES.length) % LANGUAGES.length;
@@ -212,20 +268,12 @@ async function cycleLanguage(direction) {
   playEarcon(500, 720, 0.1);
 
   const langObj = getCurrentLanguage();
-  setStatusBadge(`Doubt Language Set: ${langObj.spokenName}`, "idle");
-
-  await speakSystemAnnouncement(`Language set to ${langObj.spokenName}.`, async () => {
-    if (wasReading) {
-      await restartInterruptedSentence();
-    }
-  });
+  renderReaderView(false);
+  setStatusBadge(`Language set to ${langObj.spokenName} • Paused; press S to read`, "idle");
 }
 
 async function handleSpacebarInterruptOrSend() {
-  if (!store.appInitialized) {
-    await initializeAppAndStart();
-    return;
-  }
+  if (!store.appInitialized) return;
 
   // 1. If Welcome Guide is playing, Spacebar skips it and begins reading the book
   if (store.isPlayingWelcome) {
@@ -351,16 +399,34 @@ async function navigateParagraph(delta) {
   }
 }
 
+async function seekParagraph(index) {
+  const paras = store.serverData.paragraphs || [];
+  if (!paras.length) return;
+  const nextIdx = Math.max(0, Math.min(paras.length - 1, Number(index)));
+  pauseBookStream(0);
+  stopAssistantAudio();
+  store.currentParagraphIdx = nextIdx;
+  store.currentSentenceIdx = 0;
+  await startReadingCurrentSentence();
+}
+
 function bindUIEvents() {
-  document.getElementById("welcomeOverlay")?.addEventListener("click", initializeAppAndStart);
-  document.getElementById("btnWelcomeStart")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    initializeAppAndStart();
-  });
   document.getElementById("btnInterruptMic")?.addEventListener("click", handleSpacebarInterruptOrSend);
   document.getElementById("btnToggleRead")?.addEventListener("click", toggleManualPauseResume);
   document.getElementById("btnPrevChunk")?.addEventListener("click", () => navigateParagraph(-1));
   document.getElementById("btnNextChunk")?.addEventListener("click", () => navigateParagraph(1));
+  document.getElementById("voiceSelect")?.addEventListener("change", (event) => {
+    pauseBookStream(0);
+    stopAssistantAudio();
+    store.isReadingBook = false;
+    store.isPlayingWelcome = false;
+    store.isBookPausedForDoubt = false;
+    renderReaderView(false);
+    setStatusBadge(`Voice set to ${event.target.selectedOptions[0].text} • Paused; press S to read`, "idle");
+  });
+  document.getElementById("sectionSeek")?.addEventListener("change", (event) => {
+    seekParagraph(event.target.value);
+  });
 
   const fileInput = document.getElementById("pdfFileInput");
   document.getElementById("btnUploadPdf")?.addEventListener("click", () => fileInput?.click());
@@ -373,9 +439,6 @@ function bindKeyboardController() {
     if (activeTag === "select" || activeTag === "input" || activeTag === "textarea" || document.activeElement?.isContentEditable) return;
 
     if (!store.appInitialized) {
-      if (event.code !== "Space" && event.key !== "Enter") return;
-      event.preventDefault();
-      await initializeAppAndStart();
       return;
     }
 
@@ -387,31 +450,23 @@ function bindKeyboardController() {
 
     if (store.isRecordingDoubt) return;
 
-    switch (event.code) {
-      case "ArrowDown":
-        event.preventDefault();
-        await cycleLanguage(1);
-        break;
-      case "ArrowUp":
-        event.preventDefault();
-        await cycleLanguage(-1);
-        break;
-      case "ArrowRight":
-        event.preventDefault();
-        await navigateParagraph(1);
-        break;
-      case "ArrowLeft":
-        event.preventDefault();
-        await navigateParagraph(-1);
-        break;
-      default:
-        break;
-    }
-
     const key = event.key.toLowerCase();
-    if (key === "p") {
+    if (event.repeat) return;
+    if (key === "a") {
+      event.preventDefault();
+      await navigateParagraph(-1);
+    } else if (key === "d") {
+      event.preventDefault();
+      await navigateParagraph(1);
+    } else if (key === "s") {
       event.preventDefault();
       await toggleManualPauseResume();
+    } else if (key === "f") {
+      event.preventDefault();
+      await cycleLanguage(1);
+    } else if (key === "h") {
+      event.preventDefault();
+      await replayWelcomeGuide();
     } else if (key === "u") {
       event.preventDefault();
       document.getElementById("pdfFileInput")?.click();

@@ -22,7 +22,7 @@ export function hideWelcomeOverlay() {
 
   overlay.addEventListener("transitionend", finalizeHide, { once: true });
   // Fail-safe timeout in case prefers-reduced-motion disables CSS transitions
-  setTimeout(finalizeHide, 400);
+  setTimeout(finalizeHide, 550);
 }
 
 export function setStatusBadge(text, mode = "idle") {
@@ -125,19 +125,28 @@ export function renderReaderView(pingActiveSentence = true) {
     bookCard.classList.remove("interrupted-paused");
     posBadge.textContent = `Echoing Sentence ${store.currentSentenceIdx + 1}`;
     if (playIcon) playIcon.textContent = "⏸";
-    if (playText) playText.textContent = "Pause Reading (P)";
+    if (playText) playText.textContent = "Pause Reading (S)";
   } else if (store.isBookPausedForDoubt) {
     bookCard.classList.remove("reading-active");
     bookCard.classList.add("interrupted-paused");
     posBadge.textContent = `Paused • Will Restart Sentence ${store.currentSentenceIdx + 1}`;
     if (playIcon) playIcon.textContent = "▶";
-    if (playText) playText.textContent = "Resume Sentence (P)";
+    if (playText) playText.textContent = "Resume Sentence (S)";
   } else {
     bookCard.classList.remove("reading-active", "interrupted-paused");
     posBadge.textContent = "Paused / Ready";
     if (playIcon) playIcon.textContent = "▶";
-    if (playText) playText.textContent = "Start Reading (P)";
+    if (playText) playText.textContent = "Start Reading (S)";
   }
+
+  const sectionSeek = document.getElementById("sectionSeek");
+  const sectionSeekValue = document.getElementById("sectionSeekValue");
+  if (sectionSeek) {
+    sectionSeek.max = String(Math.max(0, totalParas - 1));
+    sectionSeek.value = String(store.currentParagraphIdx);
+    sectionSeek.disabled = totalParas < 2;
+  }
+  if (sectionSeekValue) sectionSeekValue.textContent = String(store.currentParagraphIdx + 1);
 }
 
 export function updateBookTimestamp(seconds) {

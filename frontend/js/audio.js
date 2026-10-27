@@ -26,6 +26,80 @@ export function playEarcon(freqStart, freqEnd, durationSec = 0.14) {
   }
 }
 
+export async function playBootWaterSound() {
+  let ctx;
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return false;
+    ctx = new AudioCtx();
+    if (ctx.state !== "running") {
+      await Promise.race([
+        ctx.resume(),
+        new Promise((resolve) => setTimeout(resolve, 180))
+      ]);
+    }
+    if (ctx.state !== "running") {
+      await ctx.close();
+      return false;
+    }
+
+    const now = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, now);
+    master.gain.exponentialRampToValueAtTime(0.34, now + 0.18);
+    master.gain.setValueAtTime(0.34, now + 1.45);
+    master.gain.exponentialRampToValueAtTime(0.0001, now + 2.2);
+    master.connect(ctx.destination);
+
+    // Filtered noise makes a short soft wash; rounded droplets add a water-like ripple.
+    const sampleCount = Math.floor(ctx.sampleRate * 2.2);
+    const noiseBuffer = ctx.createBuffer(1, sampleCount, ctx.sampleRate);
+    const samples = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < sampleCount; i++) samples[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    const filter = ctx.createBiquadFilter();
+    const washGain = ctx.createGain();
+    noise.buffer = noiseBuffer;
+    filter.type = "bandpass";
+    filter.frequency.setValueAtTime(700, now);
+    filter.frequency.exponentialRampToValueAtTime(1800, now + .75);
+    filter.frequency.exponentialRampToValueAtTime(550, now + 2.1);
+    filter.Q.setValueAtTime(.55, now);
+    washGain.gain.setValueAtTime(.0001, now);
+    washGain.gain.exponentialRampToValueAtTime(.22, now + .22);
+    washGain.gain.setValueAtTime(.14, now + 1.1);
+    washGain.gain.exponentialRampToValueAtTime(.0001, now + 2.15);
+    noise.connect(filter);
+    filter.connect(washGain);
+    washGain.connect(master);
+    noise.start(now);
+    noise.stop(now + 2.2);
+
+    [0.24, 0.72, 1.18].forEach((offset, index) => {
+      const start = now + offset;
+      const drop = ctx.createOscillator();
+      const dropGain = ctx.createGain();
+      drop.type = "sine";
+      drop.frequency.setValueAtTime([980, 740, 1120][index], start);
+      drop.frequency.exponentialRampToValueAtTime([540, 420, 650][index], start + .22);
+      dropGain.gain.setValueAtTime(.0001, start);
+      dropGain.gain.exponentialRampToValueAtTime(.24, start + .025);
+      dropGain.gain.exponentialRampToValueAtTime(.0001, start + .32);
+      drop.connect(dropGain);
+      dropGain.connect(master);
+      drop.start(start);
+      drop.stop(start + .34);
+    });
+
+    setTimeout(() => ctx.close().catch(() => {}), 2700);
+    return true;
+  } catch (err) {
+    if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
+    console.info("Boot sound needs a user gesture:", err);
+    return false;
+  }
+}
+
 export function getBookPlayer() {
   return document.getElementById("bookAudioPlayer");
 }

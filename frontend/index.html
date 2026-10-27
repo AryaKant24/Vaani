@@ -25,11 +25,6 @@
     <div class="ocean-current current-one"></div>
     <div class="ocean-current current-two"></div>
     <div class="ocean-ripple ripple-one"><i></i><i></i><i></i></div>
-    <div class="ocean-ripple ripple-two"><i></i><i></i><i></i></div>
-    <svg class="distant-whale" viewBox="0 0 240 90">
-      <path d="M19 48c19-19 62-29 111-18 26 6 46 17 61 15 13-2 22-12 33-22-2 15-8 27-19 33 7 5 13 5 22 2-11 17-27 21-44 12-26-13-48-16-79-10-37 7-66 3-85-12Z" fill="currentColor"/>
-      <path d="M102 59c-2 10-8 15-17 19 15 1 26-5 33-17" fill="currentColor"/>
-    </svg>
     <svg class="ocean-waves-svg" viewBox="0 0 1440 320" preserveAspectRatio="none">
       <path
         class="wave-path wave-1"
@@ -42,48 +37,35 @@
     </svg>
   </div>
 
-  <!-- Welcome Audio Overlay (Glassmorphism + Sonar Sweep) -->
+  <!-- Water ripple boot splash -->
   <div
     id="welcomeOverlay"
-    class="welcome-overlay"
-    role="dialog"
-    aria-modal="true"
+    class="welcome-overlay intro-splash"
+    role="status"
+    aria-live="polite"
     aria-labelledby="welcomeTitle"
     aria-describedby="welcomeSubtitle"
   >
     <div class="welcome-modal">
-      <!-- Decorative Whale / Echolocation Sonar SVG -->
+      <!-- Animated water-ripple logo -->
       <div class="welcome-sonar-emblem" aria-hidden="true">
-        <svg viewBox="0 0 80 80" class="whale-sonar-svg">
-          <circle cx="40" cy="40" r="34" class="emblem-ring ring-outer" />
-          <circle cx="40" cy="40" r="24" class="emblem-ring ring-mid" />
-          <path
-            d="M18 44 C26 30, 44 28, 58 38 C63 41, 66 36, 70 33 C69 41, 64 47, 56 47 C44 48, 30 52, 18 44 Z"
-            fill="currentColor"
-          />
-          <circle cx="50" cy="39" r="2" fill="#020818" />
+        <svg viewBox="0 0 80 80" class="welcome-logo-svg intro-ripple-logo">
+          <circle cx="40" cy="40" r="5" class="intro-logo-center" />
+          <circle cx="40" cy="40" r="13" class="intro-logo-ring ring-a" />
+          <circle cx="40" cy="40" r="22" class="intro-logo-ring ring-b" />
+          <circle cx="40" cy="40" r="31" class="intro-logo-ring ring-c" />
         </svg>
       </div>
 
+      <p class="intro-kicker">V A N I · VOICE-FIRST READING</p>
       <h1 id="welcomeTitle" class="welcome-title">A quieter way to learn</h1>
       <p id="welcomeSubtitle" class="welcome-subtitle">
-        Navigate your books through sound and echo. Upload any PDF, listen hands-free, and press Spacebar anytime to interrupt with a question.
+        Settle in. Your reading space is opening.
       </p>
-
-      <div class="welcome-cta-wrapper">
-        <button
-          id="btnWelcomeStart"
-          type="button"
-          class="welcome-cta"
-          aria-label="Start Vani Audio Guide. Press any key or click to begin."
-        >
-          PRESS ANY KEY OR CLICK TO BEGIN
-        </button>
-      </div>
-
-      <p class="welcome-hint">
-        Once the audio guide starts, press <kbd>SPACEBAR</kbd> anytime to skip straight to your book.
-      </p>
+      <button id="btnStartWithSound" class="intro-audio-button hidden" type="button">
+        Click or press any key to hear the water and continue
+      </button>
+      <p id="introCaption" class="intro-caption" aria-live="polite">A moment of calm before you begin</p>
     </div>
   </div>
 
@@ -131,9 +113,9 @@
   <details class="shortcut-guide">
     <summary>Keyboard help</summary>
     <div class="shortcut-list" aria-label="Keyboard shortcuts">
-      <span><kbd>Space</kbd> Pause and ask</span><span><kbd>↑</kbd>/<kbd>↓</kbd> Change language</span>
-      <span><kbd>←</kbd>/<kbd>→</kbd> Change paragraph</span><span><kbd>P</kbd> Pause or resume</span>
-      <span><kbd>U</kbd> Upload a PDF</span>
+      <span><kbd>Space</kbd> Ask / send a doubt</span><span><kbd>A</kbd>/<kbd>D</kbd> Previous / next section</span>
+      <span><kbd>S</kbd> Pause / play</span><span><kbd>F</kbd> Cycle language</span>
+      <span><kbd>H</kbd> Replay intro</span><span><kbd>U</kbd> Upload a PDF</span>
     </div>
   </details>
 
@@ -169,10 +151,10 @@
         id="btnToggleRead"
         type="button"
         class="btn-play-pause"
-        aria-label="Start or Pause Book Reading (Shortcut: P key)"
+        aria-label="Start or pause book reading (Shortcut: S key)"
       >
         <span id="playPauseIcon" aria-hidden="true">▶</span>
-        <span id="playPauseText">Start Reading (P)</span>
+        <span id="playPauseText">Start Reading (S)</span>
       </button>
     </div>
   </section>
@@ -198,17 +180,17 @@
               id="btnPrevChunk"
               type="button"
               class="btn-ghost"
-              aria-label="Previous Paragraph (Left Arrow Key)"
+              aria-label="Previous paragraph (A key)"
             >
-              ← Prev
+              A · Prev
             </button>
             <button
               id="btnNextChunk"
               type="button"
               class="btn-ghost"
-              aria-label="Next Paragraph (Right Arrow Key)"
+              aria-label="Next paragraph (D key)"
             >
-              Next →
+              Next · D
             </button>
           </div>
         </div>
@@ -220,6 +202,8 @@
         <div class="progress-bar-track" role="progressbar" aria-label="Document Reading Progress">
           <div id="chunkProgressBar" class="progress-bar-fill" style="width: 33%;"></div>
         </div>
+        <label class="section-seek-label" for="sectionSeek">Jump to paragraph <span id="sectionSeekValue">1</span></label>
+        <input id="sectionSeek" class="section-seek" type="range" min="0" max="0" value="0" step="1" aria-label="Jump to paragraph" />
       </article>
 
       <!-- Interrupted Doubt & Multilingual Explanation Card -->
