@@ -12,6 +12,9 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class Settings(BaseSettings):
+    DATABASE_URL: str = ""
+    SESSION_SECRET: str = ""
+    SESSION_HTTPS_ONLY: bool = False
     GNANI_API_KEY: str = ""
     GNANI_EVON_URL: str = "https://api.groq.com/openai/v1/chat/completions"
 

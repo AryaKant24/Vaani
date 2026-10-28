@@ -9,7 +9,14 @@ import {
   checkLlmConnection,
   requestTTS,
   uploadPdfDocument,
-  submitInterruptedDoubt
+  submitInterruptedDoubt,
+  saveReadingProgress,
+  fetchLibraryBooks,
+  fetchBook,
+  registerAccount,
+  loginAccount,
+  updateProfile,
+  logoutAccount
 } from "./api.js";
 import {
   playEarcon,
@@ -36,6 +43,7 @@ let bootSequenceFinished = false;
 let openingGuideStarted = false;
 let readerPlaybackRequest = 0;
 let assistantSpeechRequest = 0;
+let librarySpeechRequest = 0;
 
 window.addEventListener("DOMContentLoaded", async () => {
   bindUIEvents();
@@ -45,6 +53,14 @@ window.addEventListener("DOMContentLoaded", async () => {
   // 2. Load session state and verify LLM connection
   try {
     store.serverData = await fetchSessionState();
+    store.isAuthenticated = true;
+    document.getElementById("btnProfile").disabled = false;
+    document.getElementById("btnLibrary").disabled = false;
+    document.getElementById("profileButtonLabel").textContent =
+      store.serverData.profile?.display_name || "Profile";
+    store.currentBookId = store.serverData.book_id || null;
+    store.currentParagraphIdx = store.serverData.current_paragraph_index || 0;
+    store.currentSentenceIdx = store.serverData.current_sentence_index || 0;
     renderReaderView(false);
     maybePlayOpeningGuide();
 
@@ -55,7 +71,13 @@ window.addEventListener("DOMContentLoaded", async () => {
       setStatusBadge(`System Ready • LLM Connected (${llmCheck.model})`, "idle");
     }
   } catch (err) {
-    setStatusBadge("VANI could not connect to the reading service. Please refresh to try again.", "error");
+    if (err.status === 401) {
+      hideWelcomeOverlay();
+      showAuthDialog();
+      setStatusBadge("Sign in or create an account to open your library.", "idle");
+    } else {
+      setStatusBadge("VANI could not connect to the reading service. Please refresh to try again.", "error");
+    }
   }
 });
 
@@ -151,6 +173,10 @@ function prefetchNextSentence(paraIdx, sentIdx) {
 }
 
 async function startReadingCurrentSentence() {
+  if (!store.isAuthenticated) {
+    showAuthDialog();
+    return;
+  }
   if (store.isDoubtFlowActive) return;
   const playbackRequest = ++readerPlaybackRequest;
   cancelPendingAssistantSpeech();
@@ -165,6 +191,7 @@ async function startReadingCurrentSentence() {
   const para = getCurrentParagraph();
   const sentences = para.sentences || [];
   if (!sentences.length) return;
+  void saveReadingProgress(store.currentBookId, store.currentParagraphIdx, store.currentSentenceIdx).catch(() => {});
 
   setStatusBadge(
     `Reading Paragraph ${store.currentParagraphIdx + 1}, Sentence ${store.currentSentenceIdx + 1} of ${sentences.length}`,
@@ -361,7 +388,8 @@ async function handleSpacebarInterruptOrSend() {
         store.currentSentenceIdx,
         langObj.code,
         voice,
-        wavBlob
+        wavBlob,
+        store.currentBookId
       );
       if (!store.isDoubtFlowActive) return;
       renderDoubtAnswer(result);
@@ -387,13 +415,15 @@ async function handleSpacebarInterruptOrSend() {
     return;
   }
 
-  // 1. If Welcome Guide is playing, Spacebar skips it and begins reading the book
+  // Space skips the spoken introduction; reading starts only when the user presses S.
   if (store.isPlayingWelcome) {
     readerPlaybackRequest++;
     store.isPlayingWelcome = false;
     cancelPendingAssistantSpeech();
-    playEarcon(520, 780, 0.12);
-    await startReadingCurrentSentence();
+    store.isReadingBook = false;
+    store.isBookPausedForDoubt = false;
+    renderReaderView(false);
+    setStatusBadge("Introduction skipped • Press S to start reading", "idle");
     return;
   }
 
@@ -440,6 +470,10 @@ async function handleSpacebarInterruptOrSend() {
 }
 
 async function handlePdfSelection(event) {
+  if (!store.isAuthenticated) {
+    showAuthDialog();
+    return;
+  }
   if (store.isDoubtFlowActive || store.isDocumentLoading) return;
   const file = event.target.files?.[0];
   if (!file) return;
@@ -456,19 +490,15 @@ async function handlePdfSelection(event) {
     const data = await uploadPdfDocument(file);
     store.serverData.pdf_title = data.pdf_title;
     store.serverData.paragraphs = data.paragraphs;
+    store.currentBookId = data.book_id;
     store.currentParagraphIdx = 0;
     store.currentSentenceIdx = 0;
+    void saveReadingProgress(store.currentBookId, 0, 0).catch(() => {});
     store.sentenceAudioCache.clear();
     renderReaderView(true);
     setDocumentLoading(false);
 
-    setStatusBadge(`Loaded ${data.count} paragraphs • Starting reading...`, "reading");
-    await speakSystemAnnouncement(
-      `Loaded ${data.pdf_title}. Starting from paragraph 1, sentence 1.`,
-      async () => {
-        await startReadingCurrentSentence();
-      }
-    );
+    setStatusBadge(`Added to My Library • Page 1 • Press S to start reading`, "idle");
   } catch (err) {
     setDocumentLoading(false);
     setStatusBadge("PDF Upload Error: " + err.message, "error");
@@ -510,6 +540,7 @@ async function seekParagraph(index) {
 }
 
 function bindUIEvents() {
+  setupProfileDialog();
   document.getElementById("btnInterruptMic")?.addEventListener("click", handleSpacebarInterruptOrSend);
   document.getElementById("btnToggleRead")?.addEventListener("click", toggleManualPauseResume);
   document.getElementById("btnPrevChunk")?.addEventListener("click", () => navigateParagraph(-1));
@@ -553,8 +584,237 @@ function bindUIEvents() {
   fileInput?.addEventListener("change", handlePdfSelection);
 }
 
+function setupProfileDialog() {
+  const dialog = document.getElementById("profileDialog");
+  const nameInput = document.getElementById("profileDisplayName");
+  const label = document.getElementById("profileButtonLabel");
+  document.getElementById("btnProfile")?.addEventListener("click", () => {
+    const profile = store.serverData.profile || {};
+    if (nameInput) nameInput.value = profile.display_name || "";
+    document.getElementById("profileRegion").value = profile.country_or_region || "";
+    document.getElementById("profileBoard").value = profile.education_board || "";
+    document.getElementById("profileGrade").value = profile.grade_or_standard || "";
+    document.getElementById("profileYear").value = profile.academic_year || "";
+    dialog?.showModal();
+  });
+  document.getElementById("btnSaveProfile")?.addEventListener("click", () => {
+    updateProfile({
+      display_name: nameInput?.value.trim() || "",
+      country_or_region: document.getElementById("profileRegion").value.trim(),
+      education_board: document.getElementById("profileBoard").value.trim(),
+      grade_or_standard: document.getElementById("profileGrade").value.trim(),
+      academic_year: document.getElementById("profileYear").value.trim()
+    }).then((profile) => {
+      store.serverData.profile = profile;
+      if (label) label.textContent = profile.display_name;
+      document.getElementById("profileSaveStatus").textContent = "Profile saved to your account.";
+    }).catch((err) => {
+      document.getElementById("profileSaveStatus").textContent = err.message;
+    });
+  });
+  document.getElementById("btnLogout")?.addEventListener("click", async () => {
+    await logoutAccount();
+    store.isAuthenticated = false;
+    document.getElementById("btnLibrary").disabled = true;
+    store.currentBookId = null;
+    store.serverData = { welcome_script: "", pdf_title: "Sign in to open your library", paragraphs: [], doubt_history: [] };
+    store.currentParagraphIdx = 0;
+    store.currentSentenceIdx = 0;
+    renderReaderView(false);
+    dialog?.close();
+    showAuthDialog();
+    setStatusBadge("You are signed out.", "idle");
+  });
+
+  const libraryDialog = document.getElementById("libraryDialog");
+  libraryDialog?.addEventListener("close", () => {
+    librarySpeechRequest++;
+    stopAssistantAudio();
+  });
+  document.getElementById("btnLibrary")?.addEventListener("click", () => {
+    void openLibrary();
+  });
+  document.getElementById("btnCloseLibrary")?.addEventListener("click", () => libraryDialog?.close());
+
+  let isRegisterMode = false;
+  document.getElementById("btnAuthMode")?.addEventListener("click", () => {
+    isRegisterMode = !isRegisterMode;
+    document.getElementById("authTitle").textContent = isRegisterMode ? "Create your account" : "Sign in to Vani";
+    document.getElementById("btnAuthSubmit").textContent = isRegisterMode ? "Create account" : "Sign in";
+    document.getElementById("btnAuthMode").textContent = isRegisterMode ? "I already have an account" : "Create an account";
+    document.getElementById("authPassword").autocomplete = isRegisterMode ? "new-password" : "current-password";
+    document.getElementById("authDisplayName").classList.toggle("hidden", !isRegisterMode);
+    document.getElementById("authNameLabel").classList.toggle("hidden", !isRegisterMode);
+    document.getElementById("authDisplayName").required = isRegisterMode;
+    document.getElementById("btnForgotPassword").classList.toggle("hidden", isRegisterMode);
+    document.getElementById("authStatus").textContent = "";
+  });
+  document.getElementById("authForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const status = document.getElementById("authStatus");
+    status.textContent = "Please wait…";
+    try {
+      if (isRegisterMode) {
+        await registerAccount(
+          document.getElementById("authEmail").value,
+          document.getElementById("authPassword").value,
+          document.getElementById("authDisplayName").value
+        );
+      } else {
+        await loginAccount(
+          document.getElementById("authEmail").value,
+          document.getElementById("authPassword").value
+        );
+      }
+      document.getElementById("authDialog").close();
+      await loadSignedInReader();
+    } catch (err) {
+      status.textContent = err.message;
+    }
+  });
+}
+
+function showAuthDialog() {
+  store.isAuthenticated = false;
+  const profileButton = document.getElementById("btnProfile");
+  if (profileButton) profileButton.disabled = true;
+  document.getElementById("btnLibrary").disabled = true;
+  const dialog = document.getElementById("authDialog");
+  if (dialog && !dialog.open) dialog.showModal();
+}
+
+async function loadSignedInReader() {
+  store.serverData = await fetchSessionState();
+  store.isAuthenticated = true;
+  const profileButton = document.getElementById("btnProfile");
+  if (profileButton) profileButton.disabled = false;
+  document.getElementById("btnLibrary").disabled = false;
+  store.currentBookId = store.serverData.book_id || null;
+  store.currentParagraphIdx = store.serverData.current_paragraph_index || 0;
+  store.currentSentenceIdx = store.serverData.current_sentence_index || 0;
+  const label = document.getElementById("profileButtonLabel");
+  if (label) label.textContent = store.serverData.profile?.display_name || "Profile";
+  renderReaderView(false);
+  setStatusBadge("Signed in • Press S to start reading", "idle");
+}
+
+async function openLibrary() {
+  const dialog = document.getElementById("libraryDialog");
+  const list = document.getElementById("libraryBookList");
+  if (!dialog || !list) return;
+  if (store.isReadingBook) {
+    readerPlaybackRequest++;
+    pauseBookStream(0);
+    store.isReadingBook = false;
+    void saveReadingProgress(store.currentBookId, store.currentParagraphIdx, store.currentSentenceIdx).catch(() => {});
+    renderReaderView(false);
+  }
+  cancelPendingAssistantSpeech();
+  librarySpeechRequest++;
+  dialog.showModal();
+  list.textContent = "Loading your books…";
+  try {
+    const books = await fetchLibraryBooks();
+    list.replaceChildren();
+    if (!books.length) {
+      const empty = document.createElement("p");
+      empty.className = "library-empty";
+      empty.textContent = "Your library is empty. Upload a text-based PDF to add your first book.";
+      list.appendChild(empty);
+      return;
+    }
+    books.forEach((book) => {
+      const item = document.createElement("article");
+      item.className = "library-book-item";
+      const info = document.createElement("div");
+      info.className = "library-book-info";
+      const title = document.createElement("h3");
+      title.className = "library-book-title";
+      title.textContent = book.title;
+      const meta = document.createElement("p");
+      meta.className = "library-book-meta";
+      meta.textContent = `Page ${book.page_pointer} of ${book.page_count} · Saved ${new Date(book.updated_at).toLocaleString()}`;
+      const button = document.createElement("button");
+      button.className = "library-continue-button";
+      button.type = "button";
+      button.textContent = "Continue reading";
+      button.setAttribute("aria-label", `Continue ${book.title} from page ${book.page_pointer}`);
+      button.addEventListener("focus", () => {
+        item.classList.add("library-book-selected");
+        speakLibraryBookTitle(book.title);
+      });
+      button.addEventListener("blur", () => {
+        item.classList.remove("library-book-selected");
+      });
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        button.textContent = "Opening…";
+        try {
+          const data = await fetchBook(book.id);
+          store.serverData.pdf_title = data.pdf_title;
+          store.serverData.paragraphs = data.paragraphs;
+          store.currentBookId = data.book_id;
+          store.currentParagraphIdx = data.current_paragraph_index || 0;
+          store.currentSentenceIdx = data.current_sentence_index || 0;
+          store.sentenceAudioCache.clear();
+          dialog.close();
+          renderReaderView(false);
+          setStatusBadge(`Resumed ${data.pdf_title} • Page ${data.current_page} • Press S to read`, "idle");
+        } catch (err) {
+          button.disabled = false;
+          button.textContent = "Continue reading";
+          meta.textContent = err.message;
+        }
+      });
+      info.append(title, meta);
+      item.append(info, button);
+      list.appendChild(item);
+    });
+    list.querySelector(".library-continue-button")?.focus();
+  } catch (err) {
+    list.textContent = err.message;
+  }
+}
+
+async function speakLibraryBookTitle(title) {
+  const requestId = ++librarySpeechRequest;
+  stopAssistantAudio();
+  try {
+    const audio = await requestTTS(title, "en-IN", getSelectedVoice());
+    if (requestId !== librarySpeechRequest || !document.getElementById("libraryDialog")?.open) return;
+    playAssistantBase64(audio);
+  } catch {
+    // Book navigation remains usable if title speech is temporarily unavailable.
+  }
+}
+
 function bindKeyboardController() {
   window.addEventListener("keydown", async (event) => {
+    const libraryDialog = document.getElementById("libraryDialog");
+    if (libraryDialog?.open) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const buttons = [...libraryDialog.querySelectorAll(".library-continue-button:not(:disabled)")];
+        if (!buttons.length) return;
+        const current = buttons.indexOf(document.activeElement);
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        const next = current < 0
+          ? (step > 0 ? 0 : buttons.length - 1)
+          : (current + step + buttons.length) % buttons.length;
+        buttons[next].focus();
+      } else if (event.key === "Enter" && document.activeElement?.classList.contains("library-continue-button")) {
+        event.preventDefault();
+        document.activeElement.click();
+      } else if (event.key.toLowerCase() === "u") {
+        event.preventDefault();
+        librarySpeechRequest++;
+        stopAssistantAudio();
+        libraryDialog.close();
+        document.getElementById("pdfFileInput")?.click();
+      }
+      return;
+    }
+    if (document.querySelector("dialog[open]")) return;
     const activeTag = document.activeElement?.tagName?.toLowerCase();
     if (activeTag === "select" || activeTag === "input" || activeTag === "textarea" || document.activeElement?.isContentEditable) return;
 
@@ -579,7 +839,10 @@ function bindKeyboardController() {
     }
 
     const key = event.key.toLowerCase();
-    if (key === "a") {
+    if (key === "l") {
+      event.preventDefault();
+      await openLibrary();
+    } else if (key === "a") {
       event.preventDefault();
       await navigateParagraph(-1);
     } else if (key === "d") {

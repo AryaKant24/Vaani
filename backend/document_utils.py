@@ -64,3 +64,21 @@ def build_structured_paragraphs(
         )
 
     return paragraphs
+
+
+def extract_pages_and_paragraphs(pdf_bytes: bytes, max_sentences_per_para: int = 3):
+    """Keep each reading chunk tied to its one-based source PDF page."""
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    paragraphs: List[Dict[str, Any]] = []
+    readable_pages = 0
+    for page_number, page in enumerate(reader.pages, start=1):
+        extracted = page.extract_text() or ""
+        cleaned = re.sub(r"-\s*\n\s*", "", extracted).strip()
+        if not cleaned:
+            continue
+        readable_pages += 1
+        for paragraph in build_structured_paragraphs(cleaned, max_sentences_per_para):
+            paragraph["page_number"] = page_number
+            paragraph["paragraph_index"] = len(paragraphs)
+            paragraphs.append(paragraph)
+    return paragraphs, len(reader.pages), readable_pages

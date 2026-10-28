@@ -9,6 +9,7 @@ export const LANGUAGES = [
 
 export const store = {
   appInitialized: false,
+  isAuthenticated: false,
   isPlayingWelcome: false,
   isReadingBook: false,
   isBookPausedForDoubt: false,
@@ -20,6 +21,7 @@ export const store = {
   currentLangIdx: 0,
   currentParagraphIdx: 0,
   currentSentenceIdx: 0,
+  currentBookId: null,
   sentenceAudioCache: new Map(),
   serverData: {
     welcome_script: "",

@@ -1,26 +1,36 @@
 import base64
 import logging
+import re
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from psycopg.errors import UniqueViolation
+from starlette.middleware.sessions import SessionMiddleware
 
 from backend.agents import study_agent
 from backend.config import BASE_DIR, settings
-from backend.document_utils import build_structured_paragraphs, extract_text_from_pdf
+from backend.document_utils import build_structured_paragraphs, extract_pages_and_paragraphs
+from backend import database
 from backend.services import (
     InvalidUpstreamCredentialsError,
     gnani_service,
 )
 
 logger = logging.getLogger("vani.main")
+password_hasher = PasswordHasher()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if len(settings.SESSION_SECRET) < 32:
+        raise RuntimeError("Set SESSION_SECRET to a random value of at least 32 characters in .env.")
+    database.initialize_database()
     try:
         yield
     finally:
@@ -36,10 +46,18 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SESSION_SECRET or "startup-requires-configured-session-secret",
+    session_cookie="vani_session",
+    same_site="lax",
+    https_only=settings.SESSION_HTTPS_ONLY,
+    max_age=60 * 60 * 24 * 14,
 )
 
 FRONTEND_DIR = BASE_DIR / "frontend"
@@ -81,6 +99,39 @@ class TTSRequest(BaseModel):
     voice: Optional[str] = "Nalini"
 
 
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    display_name: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ProfileRequest(BaseModel):
+    display_name: str
+    country_or_region: str = ""
+    education_board: str = ""
+    grade_or_standard: str = ""
+    academic_year: str = ""
+
+
+def require_user(request: Request) -> str:
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Please sign in to continue.")
+    return user_id
+
+
+def public_profile(user_id: str) -> dict[str, Any]:
+    profile = database.get_user_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=401, detail="Your session has expired. Please sign in again.")
+    return {**profile, "id": str(profile["id"])}
+
+
 def _encode_audio_b64(audio_bytes: bytes) -> str:
     return base64.b64encode(audio_bytes).decode("utf-8")
 
@@ -94,8 +145,137 @@ async def serve_frontend() -> HTMLResponse:
 
 
 @app.get("/api/state")
-async def get_session_state() -> Dict[str, Any]:
-    return SESSION_STATE
+async def get_session_state(request: Request) -> Dict[str, Any]:
+    user_id = require_user(request)
+    book = database.get_last_book(user_id)
+    if not book:
+        return {**SESSION_STATE, "book_id": None, "current_page": 1,
+                "current_paragraph_index": 0, "current_sentence_index": 0,
+                "profile": public_profile(user_id)}
+    return {
+        "welcome_script": WELCOME_SCRIPT,
+        "pdf_title": book["title"],
+        "paragraphs": book["paragraphs"],
+        "doubt_history": [],
+        "book_id": book["id"],
+        "current_page": book["page_pointer"],
+        "current_paragraph_index": book["paragraph_index"],
+        "current_sentence_index": book["sentence_index"],
+        "profile": public_profile(user_id),
+    }
+
+
+@app.get("/api/books")
+async def list_user_books(request: Request) -> List[Dict[str, Any]]:
+    return database.list_books(require_user(request))
+
+
+@app.get("/api/books/{book_id}")
+async def open_user_book(book_id: str, request: Request) -> Dict[str, Any]:
+    user_id = require_user(request)
+    book = database.get_book(user_id, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    database.mark_book_opened(user_id, book_id)
+    return {
+        "book_id": str(book["id"]),
+        "pdf_title": book["title"],
+        "paragraphs": book["paragraphs"],
+        "page_count": book["page_count"],
+        "current_page": book["page_pointer"],
+        "current_paragraph_index": book["paragraph_index"],
+        "current_sentence_index": book["sentence_index"],
+    }
+
+
+@app.post("/api/auth/register")
+async def register_account(req: RegisterRequest, request: Request) -> Dict[str, Any]:
+    email = req.email.strip().lower()
+    display_name = req.display_name.strip()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or len(email) > 254:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    if len(req.password) < 10 or len(req.password) > 128:
+        raise HTTPException(status_code=400, detail="Password must be between 10 and 128 characters.")
+    if not display_name or len(display_name) > 80:
+        raise HTTPException(status_code=400, detail="Display name must be 1 to 80 characters.")
+    try:
+        user = database.create_user(email, password_hasher.hash(req.password), display_name)
+    except UniqueViolation as exc:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.") from exc
+    request.session.clear()
+    request.session["user_id"] = user["id"]
+    return public_profile(user["id"])
+
+
+@app.post("/api/auth/login")
+async def login_account(req: LoginRequest, request: Request) -> Dict[str, Any]:
+    user = database.get_user_by_email(req.email.strip().lower())
+    if not user:
+        raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+    try:
+        password_hasher.verify(user["password_hash"], req.password)
+    except VerifyMismatchError as exc:
+        raise HTTPException(status_code=401, detail="Email or password is incorrect.") from exc
+    request.session.clear()
+    request.session["user_id"] = str(user["id"])
+    return public_profile(str(user["id"]))
+
+
+@app.post("/api/auth/logout")
+async def logout_account(request: Request) -> Dict[str, bool]:
+    request.session.clear()
+    return {"logged_out": True}
+
+
+@app.get("/api/auth/me")
+async def current_account(request: Request) -> Dict[str, Any]:
+    return public_profile(require_user(request))
+
+
+@app.patch("/api/profile")
+async def update_profile(req: ProfileRequest, request: Request) -> Dict[str, Any]:
+    user_id = require_user(request)
+    values = req.model_dump()
+    for key, value in values.items():
+        if len(value) > (80 if key == "display_name" else 120):
+            raise HTTPException(status_code=400, detail=f"{key.replace('_', ' ').title()} is too long.")
+    if not values["display_name"].strip():
+        raise HTTPException(status_code=400, detail="Display name cannot be empty.")
+    values["display_name"] = values["display_name"].strip()
+    profile = database.update_user_profile(user_id, values)
+    return {**profile, "id": str(profile["id"])}
+
+
+class ProgressRequest(BaseModel):
+    paragraph_index: int
+    sentence_index: int
+
+
+@app.put("/api/books/{book_id}/progress")
+async def update_reading_progress(
+    book_id: str, req: ProgressRequest, request: Request
+) -> Dict[str, Any]:
+    user_id = require_user(request)
+    book = database.get_book(user_id, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    paragraphs = book["paragraphs"]
+    if not 0 <= req.paragraph_index < len(paragraphs):
+        raise HTTPException(status_code=400, detail="Invalid paragraph index.")
+    sentences = paragraphs[req.paragraph_index]["sentences"]
+    if not 0 <= req.sentence_index < max(1, len(sentences)):
+        raise HTTPException(status_code=400, detail="Invalid sentence index.")
+    page_pointer = max(1, int(paragraphs[req.paragraph_index].get("page_number", 1)))
+    if not database.save_progress(
+        user_id, book_id, page_pointer, req.paragraph_index, req.sentence_index
+    ):
+        raise HTTPException(status_code=404, detail="Book progress not found.")
+    return {
+        "book_id": book_id,
+        "page_pointer": page_pointer,
+        "paragraph_index": req.paragraph_index,
+        "sentence_index": req.sentence_index,
+    }
 
 
 @app.get("/api/llm-status")
@@ -140,22 +320,24 @@ async def synthesize_speech(req: TTSRequest) -> Dict[str, str]:
 
 
 @app.post("/api/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def upload_pdf(
+    request: Request, file: UploadFile = File(...)
+) -> Dict[str, Any]:
+    user_id = require_user(request)
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a valid .pdf file.")
 
     pdf_bytes = await file.read()
-    raw_text = extract_text_from_pdf(pdf_bytes)
-    if not raw_text.strip():
+    paragraphs, page_count, readable_pages = extract_pages_and_paragraphs(pdf_bytes)
+    if not paragraphs:
         raise HTTPException(status_code=400, detail="Could not extract readable text from PDF.")
-
-    paragraphs = build_structured_paragraphs(raw_text, max_sentences_per_para=3)
-    SESSION_STATE["pdf_title"] = file.filename
-    SESSION_STATE["paragraphs"] = paragraphs
-    SESSION_STATE["doubt_history"] = []
-
+    book_id = database.save_book(user_id, file.filename, paragraphs, page_count)
     return {
         "pdf_title": file.filename,
+        "book_id": book_id,
+        "current_page": 1,
+        "page_count": page_count,
+        "readable_pages": readable_pages,
         "count": len(paragraphs),
         "paragraphs": paragraphs,
     }
@@ -163,13 +345,22 @@ async def upload_pdf(file: UploadFile = File(...)) -> Dict[str, Any]:
 
 @app.post("/api/study/doubt")
 async def process_study_doubt(
+    request: Request,
     paragraph_index: int = Form(...),
     sentence_index: int = Form(...),
     language: str = Form("en-IN"),
     voice: str = Form("Nalini"),
+    book_id: Optional[str] = Form(None),
     audio: UploadFile = File(...),
 ) -> Dict[str, Any]:
-    paragraphs: List[Dict[str, Any]] = SESSION_STATE["paragraphs"]
+    user_id = require_user(request)
+    if book_id:
+        book = database.get_book(user_id, book_id)
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found.")
+        paragraphs: List[Dict[str, Any]] = book["paragraphs"]
+    else:
+        paragraphs = SESSION_STATE["paragraphs"]
     if paragraph_index < 0 or paragraph_index >= len(paragraphs):
         raise HTTPException(status_code=400, detail="Invalid paragraph index.")
 

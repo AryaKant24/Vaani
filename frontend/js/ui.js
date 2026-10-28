@@ -86,8 +86,9 @@ export function renderReaderView(pingActiveSentence = true) {
     titleEl.setAttribute("title", pdfTitle);
   }
 
+  const sourcePage = currentPara.page_number;
   document.getElementById("itemCounter").textContent =
-      `Paragraph ${store.currentParagraphIdx + 1} of ${totalParas} · Sentence ${store.currentSentenceIdx + 1} of ${totalSents}`;
+      `Page ${sourcePage || 1} · Paragraph ${store.currentParagraphIdx + 1} of ${totalParas} · Sentence ${store.currentSentenceIdx + 1} of ${totalSents}`;
 
   const chunkContainer = document.getElementById("activeChunkText");
   chunkContainer.innerHTML = "";
