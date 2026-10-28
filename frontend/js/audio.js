@@ -1,9 +1,17 @@
 let audioContext = null;
 let mediaStream = null;
 let scriptProcessor = null;
+let micSource = null;
 let audioChunks = [];
 let recordingStartTime = 0;
 let timerInterval = null;
+let bookShuttleTimer = null;
+let micStartPromise = null;
+let micStopPromise = null;
+let micEpoch = 0;
+let micActive = false;
+let assistantPlaybackVersion = 0;
+let bookPlaybackVersion = 0;
 
 export function playEarcon(freqStart, freqEnd, durationSec = 0.14) {
   try {
@@ -114,6 +122,7 @@ function setStreamVisualState(boxId, isPlaying) {
 }
 
 export function stopAssistantAudio() {
+  assistantPlaybackVersion++;
   const assistant = getAssistantPlayer();
   if (assistant) {
     assistant.onended = null;
@@ -127,6 +136,7 @@ export function stopAssistantAudio() {
 }
 
 export function pauseBookStream(rewindSeconds = 0) {
+  bookPlaybackVersion++;
   const book = getBookPlayer();
   setStreamVisualState("bookStreamBox", false);
   if (!book) return 0;
@@ -136,12 +146,32 @@ export function pauseBookStream(rewindSeconds = 0) {
   return safeTime;
 }
 
+export function shuttleBookStream(direction, seconds = 10) {
+  const book = getBookPlayer();
+  if (!book || book.paused || !Number.isFinite(book.duration)) return false;
+
+  const maxTime = Math.max(0, book.duration - 0.05);
+  const nextTime = Math.max(0, Math.min(maxTime, book.currentTime + direction * seconds));
+  if (Math.abs(nextTime - book.currentTime) < 0.05) return false;
+
+  book.currentTime = nextTime;
+  book.playbackRate = 2;
+  clearTimeout(bookShuttleTimer);
+  bookShuttleTimer = window.setTimeout(() => {
+    if (!book.paused) book.playbackRate = 1;
+  }, 1800);
+  return true;
+}
+
 export function playBookChunkBase64(base64String, onChunkFinished, onTimeUpdate) {
   const book = getBookPlayer();
   if (!book || !base64String) return;
 
+  const playbackVersion = ++bookPlaybackVersion;
+  book.playbackRate = 1;
   setStreamVisualState("bookStreamBox", true);
   book.onended = () => {
+    if (playbackVersion !== bookPlaybackVersion) return;
     setStreamVisualState("bookStreamBox", false);
     if (onChunkFinished) onChunkFinished();
   };
@@ -160,6 +190,7 @@ export function playBookChunkBase64(base64String, onChunkFinished, onTimeUpdate)
 
 export function playAssistantBase64(base64String, onFinishedCallback = null) {
   stopAssistantAudio();
+  const playbackVersion = assistantPlaybackVersion;
   const assistant = getAssistantPlayer();
   if (!assistant || !base64String) {
     if (onFinishedCallback) onFinishedCallback();
@@ -168,11 +199,13 @@ export function playAssistantBase64(base64String, onFinishedCallback = null) {
 
   setStreamVisualState("assistantStreamBox", true);
   assistant.onended = () => {
+    if (playbackVersion !== assistantPlaybackVersion) return;
     setStreamVisualState("assistantStreamBox", false);
     if (onFinishedCallback) onFinishedCallback();
   };
   assistant.src = "data:audio/wav;base64," + base64String;
   assistant.play().catch((err) => {
+    if (playbackVersion !== assistantPlaybackVersion) return;
     setStreamVisualState("assistantStreamBox", false);
     console.warn("Assistant audio blocked:", err);
     if (onFinishedCallback) onFinishedCallback();
@@ -180,43 +213,120 @@ export function playAssistantBase64(base64String, onFinishedCallback = null) {
 }
 
 export async function startMicCapture(onTick) {
+  if (micStartPromise || micActive) {
+    throw new Error("Microphone capture is already starting or active.");
+  }
+
+  clearMicTimer();
+  audioChunks = [];
+  const epoch = ++micEpoch;
   stopAssistantAudio();
   playEarcon(440, 880, 0.15);
 
-  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-  const source = audioContext.createMediaStreamSource(mediaStream);
-  scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+  const startPromise = (async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (epoch !== micEpoch) {
+      stream.getTracks().forEach((track) => track.stop());
+      return false;
+    }
 
-  audioChunks = [];
-  scriptProcessor.onaudioprocess = (event) => {
-    const channelData = event.inputBuffer.getChannelData(0);
-    audioChunks.push(new Float32Array(channelData));
-  };
+    mediaStream = stream;
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    if (epoch !== micEpoch) {
+      await releaseMicResources();
+      return false;
+    }
 
-  source.connect(scriptProcessor);
-  scriptProcessor.connect(audioContext.destination);
+    micSource = audioContext.createMediaStreamSource(mediaStream);
+    scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+    scriptProcessor.onaudioprocess = (event) => {
+      if (!micActive || epoch !== micEpoch) return;
+      audioChunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    };
+    micSource.connect(scriptProcessor);
+    scriptProcessor.connect(audioContext.destination);
 
-  recordingStartTime = Date.now();
-  timerInterval = setInterval(() => {
-    const elapsedSec = ((Date.now() - recordingStartTime) / 1000).toFixed(1);
-    if (onTick) onTick(elapsedSec);
-  }, 100);
+    recordingStartTime = Date.now();
+    micActive = true;
+    timerInterval = window.setInterval(() => {
+      if (!micActive || epoch !== micEpoch) return;
+      const elapsedSec = ((Date.now() - recordingStartTime) / 1000).toFixed(1);
+      if (onTick) onTick(elapsedSec);
+    }, 100);
+    return true;
+  })();
+
+  micStartPromise = startPromise;
+  try {
+    return await startPromise;
+  } catch (err) {
+    micEpoch++;
+    await releaseMicResources();
+    throw err;
+  } finally {
+    if (micStartPromise === startPromise) micStartPromise = null;
+  }
 }
 
-export async function stopMicCapture() {
-  clearInterval(timerInterval);
+export function stopMicCapture() {
+  if (micStopPromise) return micStopPromise;
+  micStopPromise = stopMicCaptureInternal().finally(() => {
+    micStopPromise = null;
+  });
+  return micStopPromise;
+}
+
+async function stopMicCaptureInternal() {
+  const wasActive = micActive;
+  const durationMs = wasActive ? Date.now() - recordingStartTime : 0;
+  const capturedChunks = audioChunks.slice();
+  const pendingStart = micStartPromise;
+
+  micEpoch++;
+  micActive = false;
+  clearMicTimer();
   playEarcon(880, 440, 0.15);
 
-  const durationMs = Date.now() - recordingStartTime;
-  if (scriptProcessor) scriptProcessor.disconnect();
-  if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
-  if (audioContext) await audioContext.close();
-
-  if (durationMs < 600) {
-    return null;
+  if (pendingStart && !wasActive) {
+    try { await pendingStart; } catch (_) { /* Permission or device startup failed. */ }
   }
-  return encodePCM16Wav(audioChunks, 16000);
+  await releaseMicResources();
+  audioChunks = [];
+  recordingStartTime = 0;
+
+  if (!wasActive || durationMs < 600) return null;
+  return encodePCM16Wav(capturedChunks, 16000);
+}
+
+function clearMicTimer() {
+  if (timerInterval !== null) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+}
+
+async function releaseMicResources() {
+  clearMicTimer();
+  if (micSource) {
+    try { micSource.disconnect(); } catch (_) { /* Already disconnected. */ }
+    micSource = null;
+  }
+  if (scriptProcessor) {
+    scriptProcessor.onaudioprocess = null;
+    try { scriptProcessor.disconnect(); } catch (_) { /* Already disconnected. */ }
+    scriptProcessor = null;
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach((track) => track.stop());
+    mediaStream = null;
+  }
+  if (audioContext && audioContext.state !== "closed") {
+    const contextToClose = audioContext;
+    audioContext = null;
+    try { await contextToClose.close(); } catch (_) { /* Context was already closing. */ }
+  } else {
+    audioContext = null;
+  }
 }
 
 function encodePCM16Wav(buffers, sampleRate) {

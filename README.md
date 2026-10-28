@@ -39,7 +39,8 @@ the spoken introduction. Book reading stays paused until you press `S`. Shortcut
 move to the previous or next paragraph, `S` pause/resume, `F` cycle the doubt
 language, `H` replay the spoken guide, and `U` upload a PDF. Changing the language
 leaves reading paused; press `S` when you are ready to continue. Use the paragraph
-slider to jump directly to a paragraph. `Space` pauses reading to ask or send a doubt.
+slider to jump directly to a paragraph. `←`/`→` jump back or forward 10 seconds
+and briefly play at 2×. `Space` pauses reading to ask or send a doubt.
 
 ## Technical flow
 

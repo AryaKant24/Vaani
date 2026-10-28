@@ -16,6 +16,7 @@ import {
   playBootWaterSound,
   stopAssistantAudio,
   pauseBookStream,
+  shuttleBookStream,
   playBookChunkBase64,
   playAssistantBase64,
   startMicCapture,
@@ -33,6 +34,8 @@ import {
 
 let bootSequenceFinished = false;
 let openingGuideStarted = false;
+let readerPlaybackRequest = 0;
+let assistantSpeechRequest = 0;
 
 window.addEventListener("DOMContentLoaded", async () => {
   bindUIEvents();
@@ -113,6 +116,11 @@ function getSelectedVoice() {
   return document.getElementById("voiceSelect")?.value || "Nalini";
 }
 
+function cancelPendingAssistantSpeech() {
+  assistantSpeechRequest++;
+  stopAssistantAudio();
+}
+
 async function getOrFetchSentenceAudio(paraIdx, sentIdx) {
   const paras = store.serverData.paragraphs || [];
   if (paraIdx < 0 || paraIdx >= paras.length) return null;
@@ -143,7 +151,9 @@ function prefetchNextSentence(paraIdx, sentIdx) {
 }
 
 async function startReadingCurrentSentence() {
-  stopAssistantAudio();
+  if (store.isDoubtFlowActive) return;
+  const playbackRequest = ++readerPlaybackRequest;
+  cancelPendingAssistantSpeech();
   store.isPlayingWelcome = false;
   store.isBookPausedForDoubt = false;
   store.isReadingBook = true;
@@ -166,6 +176,8 @@ async function startReadingCurrentSentence() {
       store.currentParagraphIdx,
       store.currentSentenceIdx
     );
+
+    if (playbackRequest !== readerPlaybackRequest || !store.isReadingBook || store.isDoubtFlowActive) return;
 
     prefetchNextSentence(store.currentParagraphIdx, store.currentSentenceIdx);
 
@@ -191,6 +203,7 @@ async function startReadingCurrentSentence() {
       (currentTime) => updateBookTimestamp(currentTime)
     );
   } catch (err) {
+    if (playbackRequest !== readerPlaybackRequest) return;
     store.isReadingBook = false;
     renderReaderView(false);
     setStatusBadge("Book TTS Error: " + err.message, "error");
@@ -206,14 +219,15 @@ async function restartInterruptedSentence() {
 }
 
 async function toggleManualPauseResume() {
-  if (store.isRecordingDoubt) return;
+  if (store.isDoubtFlowActive || store.isDocumentLoading) return;
 
   if (store.isReadingBook) {
+    readerPlaybackRequest++;
     pauseBookStream(0);
     store.isReadingBook = false;
     renderReaderView(false);
     setStatusBadge(
-      `Paused on Sentence ${store.currentSentenceIdx + 1} • Press P to Resume`,
+      `Paused on Sentence ${store.currentSentenceIdx + 1} • Press S to Resume`,
       "idle"
     );
   } else {
@@ -222,6 +236,8 @@ async function toggleManualPauseResume() {
 }
 
 async function speakSystemAnnouncement(text, onComplete = null, isWelcome = false) {
+  cancelPendingAssistantSpeech();
+  const requestId = assistantSpeechRequest;
   store.isPlayingWelcome = isWelcome;
   if (!text) {
     store.isPlayingWelcome = false;
@@ -231,20 +247,28 @@ async function speakSystemAnnouncement(text, onComplete = null, isWelcome = fals
 
   try {
     const b64 = await requestTTS(text, "en-IN", getSelectedVoice());
+    if (requestId !== assistantSpeechRequest) return;
+    if (store.isReadingBook || store.isDoubtFlowActive || store.isDocumentLoading) {
+      store.isPlayingWelcome = false;
+      return;
+    }
     playAssistantBase64(b64, () => {
+      if (requestId !== assistantSpeechRequest) return;
       store.isPlayingWelcome = false;
       if (onComplete) onComplete();
     });
   } catch (err) {
+    if (requestId !== assistantSpeechRequest) return;
     store.isPlayingWelcome = false;
     if (onComplete) onComplete();
   }
 }
 
 async function replayWelcomeGuide() {
-  if (!store.appInitialized) return;
+  if (!store.appInitialized || store.isDoubtFlowActive || store.isDocumentLoading) return;
+  readerPlaybackRequest++;
   pauseBookStream(0);
-  stopAssistantAudio();
+  cancelPendingAssistantSpeech();
   store.isReadingBook = false;
   store.isBookPausedForDoubt = false;
   store.isPlayingWelcome = true;
@@ -256,8 +280,10 @@ async function replayWelcomeGuide() {
 }
 
 async function cycleLanguage(direction) {
+  if (store.isDoubtFlowActive || store.isDocumentLoading) return;
+  readerPlaybackRequest++;
   pauseBookStream(0);
-  stopAssistantAudio();
+  cancelPendingAssistantSpeech();
   store.isReadingBook = false;
   store.isPlayingWelcome = false;
   store.isBookPausedForDoubt = false;
@@ -272,99 +298,158 @@ async function cycleLanguage(direction) {
   setStatusBadge(`Language set to ${langObj.spokenName} • Paused; press S to read`, "idle");
 }
 
+function setDoubtFlowActive(active) {
+  store.isDoubtFlowActive = active;
+  if (!active) {
+    store.isStartingMicCapture = false;
+    store.isPlayingDoubtAnswer = false;
+  }
+  syncInteractionControls();
+}
+
+function setDocumentLoading(loading) {
+  store.isDocumentLoading = loading;
+  syncInteractionControls();
+}
+
+function syncInteractionControls() {
+  const locked = store.isDoubtFlowActive || store.isDocumentLoading;
+  ["btnToggleRead", "btnPrevChunk", "btnNextChunk", "sectionSeek", "btnUploadPdf", "voiceSelect"]
+    .forEach((id) => {
+      const control = document.getElementById(id);
+      if (control) control.disabled = locked;
+    });
+  const micButton = document.getElementById("btnInterruptMic");
+  if (micButton) {
+    micButton.disabled = store.isDocumentLoading || (store.isDoubtFlowActive && !store.isRecordingDoubt);
+  }
+  const bookPlayer = document.getElementById("bookAudioPlayer");
+  if (bookPlayer) bookPlayer.controls = !locked;
+  const assistantPlayer = document.getElementById("assistantAudioPlayer");
+  if (assistantPlayer) {
+    assistantPlayer.controls = !store.isDocumentLoading &&
+      (!store.isDoubtFlowActive || store.isPlayingDoubtAnswer);
+  }
+}
+
 async function handleSpacebarInterruptOrSend() {
-  if (!store.appInitialized) return;
+  if (!store.appInitialized || store.isDocumentLoading) return;
+
+  if (store.isDoubtFlowActive) {
+    // Ignore extra presses while permission, submission, or answer playback is in progress.
+    if (!store.isRecordingDoubt || store.isStartingMicCapture) return;
+
+    store.isRecordingDoubt = false;
+    setMicButtonState(false);
+    setDoubtFlowActive(true);
+
+    const wavBlob = await stopMicCapture();
+    if (!wavBlob) {
+      setDoubtFlowActive(false);
+      setStatusBadge("Recording too short (<0.6s) • Restarting sentence...", "idle");
+      await restartInterruptedSentence();
+      return;
+    }
+
+    const langObj = getCurrentLanguage();
+    const voice = getSelectedVoice();
+    setStatusBadge(`Reasoning & Translating Answer into ${langObj.spokenName}...`, "recording");
+
+    try {
+      const result = await submitInterruptedDoubt(
+        store.currentParagraphIdx,
+        store.currentSentenceIdx,
+        langObj.code,
+        voice,
+        wavBlob
+      );
+      if (!store.isDoubtFlowActive) return;
+      renderDoubtAnswer(result);
+      setStatusBadge(
+        `Speaking Explanation in ${langObj.spokenName} • Will Restart Sentence ${store.currentSentenceIdx + 1}`,
+        "reading"
+      );
+
+      store.isPlayingDoubtAnswer = true;
+      syncInteractionControls();
+      playAssistantBase64(result.audio_base64, async () => {
+        if (!store.isDoubtFlowActive) return;
+        playEarcon(600, 450, 0.12);
+        setDoubtFlowActive(false);
+        await restartInterruptedSentence();
+      });
+    } catch (err) {
+      setDoubtFlowActive(false);
+      document.getElementById("formattedOutputBox").textContent =
+        "Voice assistance is temporarily unavailable. You can continue reading and try again later.";
+      setStatusBadge("Voice assistance is temporarily unavailable. You can continue reading.", "error");
+    }
+    return;
+  }
 
   // 1. If Welcome Guide is playing, Spacebar skips it and begins reading the book
   if (store.isPlayingWelcome) {
+    readerPlaybackRequest++;
     store.isPlayingWelcome = false;
-    stopAssistantAudio();
+    cancelPendingAssistantSpeech();
     playEarcon(520, 780, 0.12);
     await startReadingCurrentSentence();
     return;
   }
 
-  // 2. Interrupt current sentence and start recording doubt
-  if (!store.isRecordingDoubt) {
-    pauseBookStream(0);
-    store.isReadingBook = false;
-    store.isBookPausedForDoubt = true;
-    store.isRecordingDoubt = true;
-    renderReaderView(false);
-
-    const langObj = getCurrentLanguage();
-    setMicButtonState(true, `Listening in ${langObj.spokenName} • Press Space to Send`);
-    setStatusBadge(
-      `Interrupted Sentence ${store.currentSentenceIdx + 1} • Speak Doubt in ${langObj.spokenName}`,
-      "recording"
-    );
-
-    try {
-      await startMicCapture((elapsedSec) => {
-        const timerEl = document.getElementById("micTimer");
-        if (timerEl) {
-          timerEl.textContent = `Recording (${langObj.code}): ${elapsedSec}s • Press Space to Send`;
-        }
-      });
-    } catch (err) {
-      store.isRecordingDoubt = false;
-      setMicButtonState(false);
-      setStatusBadge("Mic Error: " + err.message, "error");
-    }
-    return;
-  }
-
-  // 3. Stop recording, send doubt, play answer in target language, then restart interrupted sentence
-  store.isRecordingDoubt = false;
-  setMicButtonState(false);
-
-  const wavBlob = await stopMicCapture();
-  if (!wavBlob) {
-    setStatusBadge("Recording too short (<0.6s) • Restarting sentence...", "idle");
-    await restartInterruptedSentence();
-    return;
-  }
+  // 2. Interrupt reading and begin a single, exclusive doubt flow.
+  readerPlaybackRequest++;
+  cancelPendingAssistantSpeech();
+  pauseBookStream(0);
+  store.isReadingBook = false;
+  store.isBookPausedForDoubt = true;
+  store.isRecordingDoubt = true;
+  store.isStartingMicCapture = true;
+  setDoubtFlowActive(true);
+  renderReaderView(false);
 
   const langObj = getCurrentLanguage();
-  const voice = getSelectedVoice();
-
+  setMicButtonState(true, `Listening in ${langObj.spokenName} • Press Space to Send`);
   setStatusBadge(
-    `Reasoning & Translating Answer into ${langObj.spokenName}...`,
+    `Interrupted Sentence ${store.currentSentenceIdx + 1} • Speak Doubt in ${langObj.spokenName}`,
     "recording"
   );
-
   try {
-    const result = await submitInterruptedDoubt(
-      store.currentParagraphIdx,
-      store.currentSentenceIdx,
-      langObj.code,
-      voice,
-      wavBlob
-    );
-    renderDoubtAnswer(result);
-
-    setStatusBadge(
-      `Speaking Explanation in ${langObj.spokenName} • Will Restart Sentence ${store.currentSentenceIdx + 1}`,
-      "reading"
-    );
-
-    playAssistantBase64(result.audio_base64, async () => {
-      playEarcon(600, 450, 0.12);
-      await restartInterruptedSentence();
+    const started = await startMicCapture((elapsedSec) => {
+      if (!store.isRecordingDoubt || !store.isDoubtFlowActive) return;
+      const timerEl = document.getElementById("micTimer");
+      if (timerEl) {
+        timerEl.textContent = `Recording (${langObj.code}): ${elapsedSec}s • Press Space to Send`;
+      }
     });
+    store.isStartingMicCapture = false;
+    if (!started) {
+      store.isRecordingDoubt = false;
+      setMicButtonState(false);
+      setDoubtFlowActive(false);
+      setStatusBadge("Microphone capture did not start. Press S to continue reading.", "error");
+    }
   } catch (err) {
-    document.getElementById("formattedOutputBox").textContent = "Voice assistance is temporarily unavailable. You can continue reading and try again later.";
-    setStatusBadge("Voice assistance is temporarily unavailable. You can continue reading.", "error");
+    store.isStartingMicCapture = false;
+    store.isRecordingDoubt = false;
+    await stopMicCapture();
+    setMicButtonState(false);
+    setDoubtFlowActive(false);
+    setStatusBadge("Mic Error: " + err.message, "error");
   }
 }
 
 async function handlePdfSelection(event) {
+  if (store.isDoubtFlowActive || store.isDocumentLoading) return;
   const file = event.target.files?.[0];
   if (!file) return;
 
+  readerPlaybackRequest++;
   pauseBookStream(0);
-  stopAssistantAudio();
+  cancelPendingAssistantSpeech();
   store.isReadingBook = false;
+  store.isPlayingWelcome = false;
+  setDocumentLoading(true);
   setStatusBadge(`Uploading & Parsing "${file.name}"...`, "recording");
 
   try {
@@ -375,6 +460,7 @@ async function handlePdfSelection(event) {
     store.currentSentenceIdx = 0;
     store.sentenceAudioCache.clear();
     renderReaderView(true);
+    setDocumentLoading(false);
 
     setStatusBadge(`Loaded ${data.count} paragraphs • Starting reading...`, "reading");
     await speakSystemAnnouncement(
@@ -384,11 +470,13 @@ async function handlePdfSelection(event) {
       }
     );
   } catch (err) {
+    setDocumentLoading(false);
     setStatusBadge("PDF Upload Error: " + err.message, "error");
   }
 }
 
 async function navigateParagraph(delta) {
+  if (store.isDoubtFlowActive || store.isDocumentLoading) return;
   const paras = store.serverData.paragraphs || [];
   const nextIdx = store.currentParagraphIdx + delta;
   if (nextIdx >= 0 && nextIdx < paras.length) {
@@ -399,12 +487,23 @@ async function navigateParagraph(delta) {
   }
 }
 
+function shuttlePlayback(direction) {
+  if (!store.isReadingBook) return;
+  if (shuttleBookStream(direction, 10)) {
+    setStatusBadge(
+      direction > 0 ? "Forward 10 seconds • Playing at 2× briefly" : "Back 10 seconds • Playing at 2× briefly",
+      "reading"
+    );
+  }
+}
+
 async function seekParagraph(index) {
+  if (store.isDoubtFlowActive || store.isDocumentLoading) return;
   const paras = store.serverData.paragraphs || [];
   if (!paras.length) return;
   const nextIdx = Math.max(0, Math.min(paras.length - 1, Number(index)));
   pauseBookStream(0);
-  stopAssistantAudio();
+  cancelPendingAssistantSpeech();
   store.currentParagraphIdx = nextIdx;
   store.currentSentenceIdx = 0;
   await startReadingCurrentSentence();
@@ -416,8 +515,10 @@ function bindUIEvents() {
   document.getElementById("btnPrevChunk")?.addEventListener("click", () => navigateParagraph(-1));
   document.getElementById("btnNextChunk")?.addEventListener("click", () => navigateParagraph(1));
   document.getElementById("voiceSelect")?.addEventListener("change", (event) => {
+    if (store.isDoubtFlowActive || store.isDocumentLoading) return;
+    readerPlaybackRequest++;
     pauseBookStream(0);
-    stopAssistantAudio();
+    cancelPendingAssistantSpeech();
     store.isReadingBook = false;
     store.isPlayingWelcome = false;
     store.isBookPausedForDoubt = false;
@@ -426,6 +527,25 @@ function bindUIEvents() {
   });
   document.getElementById("sectionSeek")?.addEventListener("change", (event) => {
     seekParagraph(event.target.value);
+  });
+
+  document.getElementById("bookAudioPlayer")?.addEventListener("play", (event) => {
+    if (store.isDoubtFlowActive || store.isDocumentLoading) {
+      event.currentTarget.pause();
+      return;
+    }
+    const assistant = document.getElementById("assistantAudioPlayer");
+    if (assistant && !assistant.paused) cancelPendingAssistantSpeech();
+    store.isPlayingWelcome = false;
+    store.isReadingBook = true;
+    renderReaderView(false);
+  });
+  document.getElementById("assistantAudioPlayer")?.addEventListener("play", () => {
+    if (!store.isReadingBook) return;
+    readerPlaybackRequest++;
+    pauseBookStream(0);
+    store.isReadingBook = false;
+    renderReaderView(false);
   });
 
   const fileInput = document.getElementById("pdfFileInput");
@@ -442,16 +562,23 @@ function bindKeyboardController() {
       return;
     }
 
+    if (event.repeat) return;
+
     if (event.code === "Space") {
       event.preventDefault();
       await handleSpacebarInterruptOrSend();
       return;
     }
 
-    if (store.isRecordingDoubt) return;
+    if (store.isDoubtFlowActive || store.isDocumentLoading) return;
+
+    if (event.code === "ArrowLeft" || event.code === "ArrowRight") {
+      event.preventDefault();
+      shuttlePlayback(event.code === "ArrowRight" ? 1 : -1);
+      return;
+    }
 
     const key = event.key.toLowerCase();
-    if (event.repeat) return;
     if (key === "a") {
       event.preventDefault();
       await navigateParagraph(-1);
