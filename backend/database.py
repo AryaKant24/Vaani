@@ -182,6 +182,16 @@ def list_books(reader_id: str) -> list[dict[str, Any]]:
     return [{**row, "id": str(row["id"])} for row in rows]
 
 
+def delete_book(reader_id: str, book_id: str) -> bool:
+    """Delete a book owned by this reader and its saved reading progress."""
+    with _connect() as conn:
+        result = conn.execute(
+            "DELETE FROM books WHERE reader_id=%s AND id=%s",
+            (reader_id, book_id),
+        )
+        return result.rowcount == 1
+
+
 def save_progress(reader_id: str, book_id: str, page_pointer: int, paragraph_index: int, sentence_index: int) -> bool:
     with _connect() as conn:
         result = conn.execute(

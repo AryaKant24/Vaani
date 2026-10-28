@@ -26,6 +26,10 @@ logger = logging.getLogger("vani.services")
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("gnani").propagate = False
 
+# Keep older Vani clients using the former "Mohan" label working with the
+# supported English male voice in Timbre v2.5.
+TTS_VOICE_ALIASES = {"mohan": "Shlok"}
+
 
 class RateLimitExceededError(Exception):
     """Raised when an API returns HTTP 429 Too Many Requests."""
@@ -34,6 +38,10 @@ class RateLimitExceededError(Exception):
 
 class RetryableUpstreamError(Exception):
     """An upstream failure that is safe to retry once or twice."""
+
+
+class InvalidTTSRequestError(Exception):
+    """The speech provider rejected the chosen model, voice, language, or format."""
 
 
 class InvalidUpstreamCredentialsError(Exception):
@@ -86,9 +94,9 @@ class GnaniService:
             await self._http_client.aclose()
 
     @staticmethod
-    def get_tts_cache_path(text: str, language: str, voice: str) -> Path:
+    def get_tts_cache_path(text: str, language: str, voice: str, model: str) -> Path:
         """Generates a deterministic filename for caching TTS audio."""
-        normalized = f"{text.strip()}|{language.strip()}|{voice.strip()}"
+        normalized = f"{text.strip()}|{language.strip()}|{voice.strip()}|{model.strip()}|1.0"
         digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()
         return AUDIO_CACHE_DIR / f"{digest}.wav"
 
@@ -172,9 +180,12 @@ class GnaniService:
     ) -> bytes:
         live_cfg = settings
         lang = (language or live_cfg.DEFAULT_LANGUAGE).strip()
-        spk_voice = (voice or live_cfg.DEFAULT_VOICE).strip()
+        requested_voice = (voice or live_cfg.DEFAULT_VOICE).strip()
+        spk_voice = TTS_VOICE_ALIASES.get(requested_voice.casefold(), requested_voice)
+        if spk_voice != requested_voice:
+            logger.info("Mapped legacy TTS voice %s to supported voice %s", requested_voice, spk_voice)
 
-        cache_path = self.get_tts_cache_path(text, lang, spk_voice)
+        cache_path = self.get_tts_cache_path(text, lang, spk_voice, live_cfg.TTS_MODEL)
         cache_key = str(cache_path)
         cache_lock = self._cache_locks.setdefault(cache_key, asyncio.Lock())
         async with cache_lock:
@@ -212,6 +223,11 @@ class GnaniService:
                 raise InvalidUpstreamCredentialsError("The speech provider rejected the configured API key.")
             if response.status_code == 429:
                 raise RateLimitExceededError("Speech provider rate limited synthesis.")
+            if response.status_code == 400:
+                logger.warning("Speech provider rejected TTS request | status=400")
+                raise InvalidTTSRequestError(
+                    "The speech provider rejected the selected voice, language, model, or audio format."
+                )
             if response.status_code >= 500:
                 raise RetryableUpstreamError(f"Speech provider returned HTTP {response.status_code}.")
             if response.is_error:

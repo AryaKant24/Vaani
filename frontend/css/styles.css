@@ -576,6 +576,7 @@ kbd {
 }
 .profile-note, .profile-save-status { margin: 0; color: var(--echo-dim); font-size: .88rem; line-height: 1.5; }
 .profile-save-status { min-height: 1em; color: var(--sonar-pulse); }
+.mic-readiness-note { margin: -.35rem 0 1rem; color: var(--echo-dim); font-size: .82rem; line-height: 1.45; text-align: center; }
 #btnAuthSubmit { justify-content: center; }
 .profile-close { position: absolute; top: .8rem; right: .8rem; width: 38px; height: 38px; border: 0; background: transparent; color: var(--echo-dim); font-size: 1.6rem; cursor: pointer; }
 .profile-logout {

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     LLM_MODEL: str = "llama-3.3-70b-versatile"
     DEFAULT_LANGUAGE: str = "en-IN"
-    DEFAULT_VOICE: str = "Nalini"
+    DEFAULT_VOICE: str = "Shlok"
     TTS_MODEL: str = "timbre-v2.5"
 
     @field_validator("*", mode="before")

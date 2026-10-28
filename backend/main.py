@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from psycopg.errors import UniqueViolation
+from pypdf.errors import PdfReadError
 from starlette.middleware.sessions import SessionMiddleware
 
 from backend.agents import study_agent
@@ -20,6 +21,7 @@ from backend.document_utils import build_structured_paragraphs, extract_pages_an
 from backend import database
 from backend.services import (
     InvalidUpstreamCredentialsError,
+    InvalidTTSRequestError,
     gnani_service,
 )
 
@@ -28,9 +30,20 @@ password_hasher = PasswordHasher()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if len(settings.SESSION_SECRET) < 32:
-        raise RuntimeError("Set SESSION_SECRET to a random value of at least 32 characters in .env.")
-    database.initialize_database()
+    session_secret = settings.SESSION_SECRET.strip()
+    if len(session_secret) < 32 or session_secret.startswith("replace_with_"):
+        raise RuntimeError(
+            "Set SESSION_SECRET to a newly generated random value of at least 32 characters in .env; "
+            "do not leave the example placeholder."
+        )
+    try:
+        database.initialize_database()
+    except Exception as exc:
+        logger.exception("Database initialization failed")
+        raise RuntimeError(
+            "Could not initialize PostgreSQL. Check DATABASE_URL, confirm the server is running, "
+            "and verify that the configured role can create and update Vani's tables."
+        ) from exc
     try:
         yield
     finally:
@@ -69,10 +82,11 @@ app.mount("/js", StaticFiles(directory=str(FRONTEND_DIR / "js")), name="js")
 
 WELCOME_SCRIPT = (
     "Welcome to Vani Interactive Book Reader. "
-    "Press Spacebar to skip this introduction and start listening to the book. "
-    "Use the Up and Down arrow keys to choose your preferred language. "
-    "While Vani is reading, press Spacebar at any moment to interrupt and ask a doubt. "
-    "After answering your question in your chosen language, Vani will automatically restart from the exact sentence where it left off."
+    "Press Spacebar to skip this introduction. Press S when you are ready to start reading. "
+    "Use A and D to move between paragraphs, and the Up and Down arrow keys to change reading speed. "
+    "Press F to change the language used for doubt answers, and L to open your library. "
+    "While Vani is reading, press Spacebar to pause and ask a doubt. "
+    "After answering in your chosen language, Vani resumes from the sentence where it left off."
 )
 
 SAMPLE_TEXT = (
@@ -96,7 +110,7 @@ SESSION_STATE: Dict[str, Any] = {
 class TTSRequest(BaseModel):
     text: str
     language: Optional[str] = "en-IN"
-    voice: Optional[str] = "Nalini"
+    voice: Optional[str] = "Shlok"
 
 
 class RegisterRequest(BaseModel):
@@ -186,6 +200,13 @@ async def open_user_book(book_id: str, request: Request) -> Dict[str, Any]:
         "current_paragraph_index": book["paragraph_index"],
         "current_sentence_index": book["sentence_index"],
     }
+
+
+@app.delete("/api/books/{book_id}")
+async def delete_user_book(book_id: str, request: Request) -> Dict[str, bool]:
+    if not database.delete_book(require_user(request), book_id):
+        raise HTTPException(status_code=404, detail="Book not found.")
+    return {"deleted": True}
 
 
 @app.post("/api/auth/register")
@@ -279,7 +300,8 @@ async def update_reading_progress(
 
 
 @app.get("/api/llm-status")
-async def check_llm_status() -> Dict[str, Any]:
+async def check_llm_status(request: Request) -> Dict[str, Any]:
+    require_user(request)
     try:
         await gnani_service.generate_evon_response(
             system_prompt="Reply with the single word OK.",
@@ -303,7 +325,8 @@ async def check_llm_status() -> Dict[str, Any]:
 
 
 @app.post("/api/tts")
-async def synthesize_speech(req: TTSRequest) -> Dict[str, str]:
+async def synthesize_speech(req: TTSRequest, request: Request) -> Dict[str, str]:
+    require_user(request)
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
     try:
@@ -314,8 +337,13 @@ async def synthesize_speech(req: TTSRequest) -> Dict[str, str]:
     except InvalidUpstreamCredentialsError as exc:
         logger.warning("TTS request failed | reason=invalid_credentials")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except InvalidTTSRequestError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected voice, language, or TTS model is not supported by the speech provider.",
+        ) from exc
     except Exception as exc:
-        logger.error("TTS request failed | error_type=%s", type(exc).__name__)
+        logger.error("TTS request failed | error_type=%s | error=%s", type(exc).__name__, exc)
         raise HTTPException(status_code=502, detail="Speech synthesis is temporarily unavailable.") from exc
 
 
@@ -328,7 +356,13 @@ async def upload_pdf(
         raise HTTPException(status_code=400, detail="Please upload a valid .pdf file.")
 
     pdf_bytes = await file.read()
-    paragraphs, page_count, readable_pages = extract_pages_and_paragraphs(pdf_bytes)
+    try:
+        paragraphs, page_count, readable_pages = extract_pages_and_paragraphs(pdf_bytes)
+    except (PdfReadError, ValueError, OSError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not read this PDF. Make sure it is valid and not password-protected.",
+        ) from exc
     if not paragraphs:
         raise HTTPException(status_code=400, detail="Could not extract readable text from PDF.")
     book_id = database.save_book(user_id, file.filename, paragraphs, page_count)
@@ -349,7 +383,7 @@ async def process_study_doubt(
     paragraph_index: int = Form(...),
     sentence_index: int = Form(...),
     language: str = Form("en-IN"),
-    voice: str = Form("Nalini"),
+    voice: str = Form("Shlok"),
     book_id: Optional[str] = Form(None),
     audio: UploadFile = File(...),
 ) -> Dict[str, Any]:
@@ -402,6 +436,11 @@ async def process_study_doubt(
         tts_bytes = await gnani_service.text_to_speech(
             text=explanation, language=language, voice=voice
         )
+    except InvalidTTSRequestError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected voice is not available for the doubt-answer language.",
+        ) from exc
     except Exception as exc:
         logger.error("Answer audio failed | error_type=%s", type(exc).__name__)
         raise HTTPException(status_code=502, detail="Answer audio is temporarily unavailable.") from exc

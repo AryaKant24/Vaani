@@ -88,7 +88,7 @@
 
     <div class="header-controls">
       <div id="langIndicatorCard" class="lang-indicator-card">
-        <span class="control-label">Language</span>
+        <span class="control-label">Doubt language</span>
         <span id="activeLangDisplay" aria-live="polite" class="active-lang-value">
           English / Hinglish (en-IN)
         </span>
@@ -99,8 +99,8 @@
         <label for="voiceSelect" class="control-label">Voice</label>
         <div class="select-wrapper">
           <select id="voiceSelect" aria-label="Select reading voice" class="voice-select">
-            <option value="Nalini">Nalini (Female)</option>
-            <option value="Mohan">Mohan (Male)</option>
+            <option value="Shlok">Shlok (Male, English)</option>
+            <option value="Nalini">Nalini (Female, Hindi)</option>
           </select>
           <svg class="select-chevron" viewBox="0 0 20 20" aria-hidden="true">
             <path d="M5.5 7.5L10 12l4.5-4.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" />
@@ -161,17 +161,20 @@
       <button id="btnCloseLibrary" class="profile-close" type="button" aria-label="Close library">×</button>
       <p class="control-label">YOUR BOOKS</p>
       <h2 id="libraryTitle">My Library</h2>
-      <p class="library-intro">Use ↑ and ↓ to browse books. Vani reads each title aloud. Press Enter to continue or U to upload a book.</p>
+      <p class="library-intro">Use ↑ and ↓ to browse books. Vani reads each title aloud. Press Enter to continue, U to upload, or R to remove the selected book. Press R again to confirm removal or Escape to cancel.</p>
       <div id="libraryBookList" class="library-book-list" aria-live="polite"></div>
+      <p id="libraryActionStatus" class="library-intro" role="status" aria-live="polite"></p>
     </div>
   </dialog>
 
   <details class="shortcut-guide">
     <summary>Keyboard help</summary>
     <div class="shortcut-list" aria-label="Keyboard shortcuts">
-      <span><kbd>Space</kbd> Ask / send a doubt</span><span><kbd>A</kbd>/<kbd>D</kbd> Previous / next section</span>
-      <span><kbd>S</kbd> Pause / play</span><span><kbd>F</kbd> Cycle language</span>
+      <span><kbd>Space</kbd> Skip guide / ask or send a doubt</span><span><kbd>A</kbd>/<kbd>D</kbd> Previous / next paragraph</span>
+      <span><kbd>S</kbd> Pause / play</span><span><kbd>F</kbd> Cycle doubt language</span>
       <span><kbd>H</kbd> Replay intro</span><span><kbd>L</kbd> Open library</span><span><kbd>U</kbd> Upload a PDF</span>
+      <span><kbd>R</kbd> Remove a library book (press twice to confirm, Escape to cancel)</span>
+      <span><kbd>↑</kbd>/<kbd>↓</kbd> Adjust reading speed (reader)</span>
       <span><kbd>←</kbd>/<kbd>→</kbd> Skip 10 seconds; play at 2× briefly</span>
     </div>
   </details>
@@ -347,6 +350,9 @@
             </span>
           </button>
         </div>
+        <p id="micReadinessNote" class="mic-readiness-note" aria-live="polite">
+          Microphone access is used for doubts. When ready, it stays muted between recordings for faster starts.
+        </p>
 
         <!-- Dual Audio Stream Panels -->
         <div class="dual-audio-container">

@@ -23,6 +23,10 @@ export async function fetchBook(bookId) {
   return apiJson(`/api/books/${encodeURIComponent(bookId)}`);
 }
 
+export async function deleteBook(bookId) {
+  return apiJson(`/api/books/${encodeURIComponent(bookId)}`, { method: "DELETE" });
+}
+
 export async function registerAccount(email, password, displayName) {
   return apiJson("/api/auth/register", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -49,32 +53,25 @@ export async function logoutAccount() {
 }
 
 export async function checkLlmConnection() {
-  const response = await fetch("/api/llm-status");
-  return await response.json();
+  return apiJson("/api/llm-status");
 }
 
-export async function requestTTS(text, language = "en-IN", voice = "Nalini") {
-  const response = await fetch("/api/tts", {
+export async function requestTTS(text, language = "en-IN", voice = "Shlok") {
+  const data = await apiJson("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, language, voice })
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || "TTS synthesis failed.");
   return data.audio_base64;
 }
 
 export async function uploadPdfDocument(file) {
   const formData = new FormData();
   formData.append("file", file);
-
-  const response = await fetch("/api/upload-pdf", {
+  return apiJson("/api/upload-pdf", {
     method: "POST",
     body: formData
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || "PDF upload failed.");
-  return data;
 }
 
 export async function saveReadingProgress(bookId, paragraphIndex, sentenceIndex) {
@@ -113,6 +110,10 @@ export async function submitInterruptedDoubt(
     body: formData
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || "Doubt resolution failed.");
+  if (!response.ok) {
+    const error = new Error(data.detail || "Doubt resolution failed.");
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }

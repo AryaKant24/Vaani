@@ -13,13 +13,16 @@ import {
   saveReadingProgress,
   fetchLibraryBooks,
   fetchBook,
+  deleteBook,
   registerAccount,
   loginAccount,
   updateProfile,
   logoutAccount
 } from "./api.js";
 import {
+  adjustBookPlaybackRate,
   playEarcon,
+  playPageTurnSound,
   playBootWaterSound,
   stopAssistantAudio,
   pauseBookStream,
@@ -27,7 +30,9 @@ import {
   playBookChunkBase64,
   playAssistantBase64,
   startMicCapture,
-  stopMicCapture
+  stopMicCapture,
+  prepareMicCapture,
+  releaseMicCapture
 } from "./audio.js";
 import {
   hideWelcomeOverlay,
@@ -44,9 +49,25 @@ let openingGuideStarted = false;
 let readerPlaybackRequest = 0;
 let assistantSpeechRequest = 0;
 let librarySpeechRequest = 0;
+let pendingLibraryDeletion = null;
+const PARAGRAPHS_PER_PAGE_TURN = 3;
+const VOICE_PREFERENCE_KEY = "vani.selectedVoice";
+
+window.addEventListener("pagehide", () => {
+  void releaseMicCapture();
+});
+
+async function playPageTurnIfCrossing(fromParagraph, toParagraph) {
+  const fromPage = Math.floor(fromParagraph / PARAGRAPHS_PER_PAGE_TURN);
+  const toPage = Math.floor(toParagraph / PARAGRAPHS_PER_PAGE_TURN);
+  if (fromPage === toPage) return;
+  const played = await playPageTurnSound();
+  if (played) await new Promise((resolve) => window.setTimeout(resolve, 620));
+}
 
 window.addEventListener("DOMContentLoaded", async () => {
   bindUIEvents();
+  syncInteractionControls();
   bindKeyboardController();
   void runBootSequence();
 
@@ -54,21 +75,27 @@ window.addEventListener("DOMContentLoaded", async () => {
   try {
     store.serverData = await fetchSessionState();
     store.isAuthenticated = true;
-    document.getElementById("btnProfile").disabled = false;
-    document.getElementById("btnLibrary").disabled = false;
+    syncInteractionControls();
     document.getElementById("profileButtonLabel").textContent =
       store.serverData.profile?.display_name || "Profile";
+    warmMicrophone();
     store.currentBookId = store.serverData.book_id || null;
     store.currentParagraphIdx = store.serverData.current_paragraph_index || 0;
     store.currentSentenceIdx = store.serverData.current_sentence_index || 0;
     renderReaderView(false);
     maybePlayOpeningGuide();
 
-    const llmCheck = await checkLlmConnection();
-    if (!llmCheck.connected && !store.isPlayingWelcome) {
-      setStatusBadge("Voice assistance is temporarily unavailable. You can continue reading.", "error");
-    } else if (llmCheck.connected && !store.isPlayingWelcome) {
-      setStatusBadge(`System Ready • LLM Connected (${llmCheck.model})`, "idle");
+    try {
+      const llmCheck = await checkLlmConnection();
+      if (!llmCheck.connected && !store.isPlayingWelcome) {
+        setStatusBadge("Voice assistance is temporarily unavailable. You can continue reading.", "error");
+      } else if (llmCheck.connected && !store.isPlayingWelcome) {
+        setStatusBadge(`System Ready • LLM Connected (${llmCheck.model})`, "idle");
+      }
+    } catch (_) {
+      if (!store.isPlayingWelcome) {
+        setStatusBadge("Voice assistance is temporarily unavailable. You can continue reading.", "error");
+      }
     }
   } catch (err) {
     if (err.status === 401) {
@@ -135,7 +162,7 @@ function maybePlayOpeningGuide() {
 }
 
 function getSelectedVoice() {
-  return document.getElementById("voiceSelect")?.value || "Nalini";
+  return document.getElementById("voiceSelect")?.value || "Shlok";
 }
 
 function cancelPendingAssistantSpeech() {
@@ -217,8 +244,11 @@ async function startReadingCurrentSentence() {
           store.currentSentenceIdx++;
           await startReadingCurrentSentence();
         } else if (store.currentParagraphIdx < paras.length - 1) {
+          const previousParagraph = store.currentParagraphIdx;
           store.currentParagraphIdx++;
           store.currentSentenceIdx = 0;
+          await playPageTurnIfCrossing(previousParagraph, store.currentParagraphIdx);
+          if (!store.isReadingBook) return;
           await startReadingCurrentSentence();
         } else {
           store.isReadingBook = false;
@@ -233,6 +263,12 @@ async function startReadingCurrentSentence() {
     if (playbackRequest !== readerPlaybackRequest) return;
     store.isReadingBook = false;
     renderReaderView(false);
+    if (err.status === 401) {
+      store.isAuthenticated = false;
+      showAuthDialog();
+      setStatusBadge("Your session expired. Please sign in again.", "error");
+      return;
+    }
     setStatusBadge("Book TTS Error: " + err.message, "error");
   }
 }
@@ -322,7 +358,9 @@ async function cycleLanguage(direction) {
 
   const langObj = getCurrentLanguage();
   renderReaderView(false);
-  setStatusBadge(`Language set to ${langObj.spokenName} • Paused; press S to read`, "idle");
+  const confirmation = `Language changed to ${langObj.spokenName}. Reading is paused. Press S to resume.`;
+  setStatusBadge(confirmation, "idle");
+  await speakSystemAnnouncement(confirmation);
 }
 
 function setDoubtFlowActive(active) {
@@ -341,26 +379,36 @@ function setDocumentLoading(loading) {
 
 function syncInteractionControls() {
   const locked = store.isDoubtFlowActive || store.isDocumentLoading;
+  const requiresAccount = !store.isAuthenticated;
   ["btnToggleRead", "btnPrevChunk", "btnNextChunk", "sectionSeek", "btnUploadPdf", "voiceSelect"]
     .forEach((id) => {
       const control = document.getElementById(id);
-      if (control) control.disabled = locked;
+      if (control) control.disabled = locked || requiresAccount;
     });
   const micButton = document.getElementById("btnInterruptMic");
   if (micButton) {
-    micButton.disabled = store.isDocumentLoading || (store.isDoubtFlowActive && !store.isRecordingDoubt);
+    micButton.disabled = requiresAccount || store.isDocumentLoading ||
+      (store.isDoubtFlowActive && !store.isRecordingDoubt);
   }
+  const profileButton = document.getElementById("btnProfile");
+  if (profileButton) profileButton.disabled = requiresAccount || locked;
+  const libraryButton = document.getElementById("btnLibrary");
+  if (libraryButton) libraryButton.disabled = requiresAccount || locked;
   const bookPlayer = document.getElementById("bookAudioPlayer");
-  if (bookPlayer) bookPlayer.controls = !locked;
+  if (bookPlayer) bookPlayer.controls = !locked && !requiresAccount;
   const assistantPlayer = document.getElementById("assistantAudioPlayer");
   if (assistantPlayer) {
-    assistantPlayer.controls = !store.isDocumentLoading &&
+    assistantPlayer.controls = !requiresAccount && !store.isDocumentLoading &&
       (!store.isDoubtFlowActive || store.isPlayingDoubtAnswer);
   }
 }
 
 async function handleSpacebarInterruptOrSend() {
   if (!store.appInitialized || store.isDocumentLoading) return;
+  if (!store.isAuthenticated) {
+    showAuthDialog();
+    return;
+  }
 
   if (store.isDoubtFlowActive) {
     // Ignore extra presses while permission, submission, or answer playback is in progress.
@@ -410,6 +458,17 @@ async function handleSpacebarInterruptOrSend() {
       setDoubtFlowActive(false);
       document.getElementById("formattedOutputBox").textContent =
         "Voice assistance is temporarily unavailable. You can continue reading and try again later.";
+      if (err.status === 401) {
+        store.isAuthenticated = false;
+        showAuthDialog();
+        setStatusBadge("Your session expired. Please sign in again.", "error");
+        return;
+      }
+      if (err.status === 422) {
+        document.getElementById("formattedOutputBox").textContent = err.message;
+        setStatusBadge(err.message, "error");
+        return;
+      }
       setStatusBadge("Voice assistance is temporarily unavailable. You can continue reading.", "error");
     }
     return;
@@ -465,6 +524,8 @@ async function handleSpacebarInterruptOrSend() {
     await stopMicCapture();
     setMicButtonState(false);
     setDoubtFlowActive(false);
+    const micNote = document.getElementById("micReadinessNote");
+    if (micNote) micNote.textContent = "Microphone is unavailable. Allow it in your browser's site permissions, then press Space to retry.";
     setStatusBadge("Mic Error: " + err.message, "error");
   }
 }
@@ -501,6 +562,12 @@ async function handlePdfSelection(event) {
     setStatusBadge(`Added to My Library • Page 1 • Press S to start reading`, "idle");
   } catch (err) {
     setDocumentLoading(false);
+    if (err.status === 401) {
+      store.isAuthenticated = false;
+      showAuthDialog();
+      setStatusBadge("Your session expired. Please sign in again.", "error");
+      return;
+    }
     setStatusBadge("PDF Upload Error: " + err.message, "error");
   }
 }
@@ -510,9 +577,14 @@ async function navigateParagraph(delta) {
   const paras = store.serverData.paragraphs || [];
   const nextIdx = store.currentParagraphIdx + delta;
   if (nextIdx >= 0 && nextIdx < paras.length) {
+    const wasReading = store.isReadingBook;
+    const playbackRequest = readerPlaybackRequest;
+    const previousParagraph = store.currentParagraphIdx;
     pauseBookStream(0);
     store.currentParagraphIdx = nextIdx;
     store.currentSentenceIdx = 0;
+    await playPageTurnIfCrossing(previousParagraph, nextIdx);
+    if (wasReading && (readerPlaybackRequest !== playbackRequest || !store.isReadingBook)) return;
     await startReadingCurrentSentence();
   }
 }
@@ -532,10 +604,15 @@ async function seekParagraph(index) {
   const paras = store.serverData.paragraphs || [];
   if (!paras.length) return;
   const nextIdx = Math.max(0, Math.min(paras.length - 1, Number(index)));
+  const wasReading = store.isReadingBook;
+  const playbackRequest = readerPlaybackRequest;
+  const previousParagraph = store.currentParagraphIdx;
   pauseBookStream(0);
   cancelPendingAssistantSpeech();
   store.currentParagraphIdx = nextIdx;
   store.currentSentenceIdx = 0;
+  await playPageTurnIfCrossing(previousParagraph, nextIdx);
+  if (wasReading && (readerPlaybackRequest !== playbackRequest || !store.isReadingBook)) return;
   await startReadingCurrentSentence();
 }
 
@@ -545,7 +622,23 @@ function bindUIEvents() {
   document.getElementById("btnToggleRead")?.addEventListener("click", toggleManualPauseResume);
   document.getElementById("btnPrevChunk")?.addEventListener("click", () => navigateParagraph(-1));
   document.getElementById("btnNextChunk")?.addEventListener("click", () => navigateParagraph(1));
-  document.getElementById("voiceSelect")?.addEventListener("change", (event) => {
+  const voiceSelect = document.getElementById("voiceSelect");
+  if (voiceSelect) {
+    try {
+      const savedVoice = localStorage.getItem(VOICE_PREFERENCE_KEY);
+      const savedOption = [...voiceSelect.options].find((option) => option.value === savedVoice);
+      if (savedOption) voiceSelect.value = savedOption.value;
+      else if (savedVoice?.toLowerCase() === "mohan") voiceSelect.value = "Shlok";
+    } catch (_) {
+      // The dropdown still works when browser storage is disabled.
+    }
+  }
+  voiceSelect?.addEventListener("change", (event) => {
+    try {
+      localStorage.setItem(VOICE_PREFERENCE_KEY, event.target.value);
+    } catch (_) {
+      // The current selection still applies for this page session.
+    }
     if (store.isDoubtFlowActive || store.isDocumentLoading) return;
     readerPlaybackRequest++;
     pauseBookStream(0);
@@ -554,7 +647,9 @@ function bindUIEvents() {
     store.isPlayingWelcome = false;
     store.isBookPausedForDoubt = false;
     renderReaderView(false);
-    setStatusBadge(`Voice set to ${event.target.selectedOptions[0].text} • Paused; press S to read`, "idle");
+    const confirmation = `Voice changed to ${event.target.selectedOptions[0].text}. Reading is paused. Press S to continue.`;
+    setStatusBadge(confirmation, "idle");
+    void speakSystemAnnouncement(confirmation);
   });
   document.getElementById("sectionSeek")?.addEventListener("change", (event) => {
     seekParagraph(event.target.value);
@@ -580,7 +675,13 @@ function bindUIEvents() {
   });
 
   const fileInput = document.getElementById("pdfFileInput");
-  document.getElementById("btnUploadPdf")?.addEventListener("click", () => fileInput?.click());
+  document.getElementById("btnUploadPdf")?.addEventListener("click", () => {
+    if (!store.isAuthenticated) {
+      showAuthDialog();
+      return;
+    }
+    fileInput?.click();
+  });
   fileInput?.addEventListener("change", handlePdfSelection);
 }
 
@@ -613,22 +714,50 @@ function setupProfileDialog() {
     });
   });
   document.getElementById("btnLogout")?.addEventListener("click", async () => {
-    await logoutAccount();
-    store.isAuthenticated = false;
-    document.getElementById("btnLibrary").disabled = true;
-    store.currentBookId = null;
-    store.serverData = { welcome_script: "", pdf_title: "Sign in to open your library", paragraphs: [], doubt_history: [] };
-    store.currentParagraphIdx = 0;
-    store.currentSentenceIdx = 0;
+    const logoutButton = document.getElementById("btnLogout");
+    const status = document.getElementById("profileSaveStatus");
+    if (logoutButton) logoutButton.disabled = true;
+    readerPlaybackRequest++;
+    pauseBookStream(0);
+    cancelPendingAssistantSpeech();
+    librarySpeechRequest++;
+    store.isReadingBook = false;
+    store.isPlayingWelcome = false;
+    store.isBookPausedForDoubt = false;
+    store.isRecordingDoubt = false;
+    setDoubtFlowActive(false);
+    setMicButtonState(false);
+    store.sentenceAudioCache.clear();
     renderReaderView(false);
-    dialog?.close();
-    showAuthDialog();
-    setStatusBadge("You are signed out.", "idle");
+    try {
+      await releaseMicCapture();
+      await logoutAccount();
+      store.isAuthenticated = false;
+      document.getElementById("btnLibrary").disabled = true;
+      store.currentBookId = null;
+      store.serverData = { welcome_script: "", pdf_title: "Sign in to open your library", paragraphs: [], doubt_history: [] };
+      store.currentParagraphIdx = 0;
+      store.currentSentenceIdx = 0;
+      renderReaderView(false);
+      dialog?.close();
+      showAuthDialog();
+      document.getElementById("micReadinessNote").textContent = "Sign in to prepare the microphone for faster doubts.";
+      setStatusBadge("You are signed out.", "idle");
+    } catch (err) {
+      if (status) status.textContent = `Sign out failed: ${err.message}`;
+    } finally {
+      if (logoutButton) logoutButton.disabled = false;
+    }
   });
 
   const libraryDialog = document.getElementById("libraryDialog");
   libraryDialog?.addEventListener("close", () => {
     librarySpeechRequest++;
+    pendingLibraryDeletion = null;
+    const closeButton = document.getElementById("btnCloseLibrary");
+    if (closeButton) closeButton.disabled = false;
+    const actionStatus = document.getElementById("libraryActionStatus");
+    if (actionStatus) actionStatus.textContent = "";
     stopAssistantAudio();
   });
   document.getElementById("btnLibrary")?.addEventListener("click", () => {
@@ -652,6 +781,9 @@ function setupProfileDialog() {
   document.getElementById("authForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const status = document.getElementById("authStatus");
+    const submitButton = document.getElementById("btnAuthSubmit");
+    const authDialog = document.getElementById("authDialog");
+    if (submitButton) submitButton.disabled = true;
     status.textContent = "Please wait…";
     try {
       if (isRegisterMode) {
@@ -669,16 +801,39 @@ function setupProfileDialog() {
       document.getElementById("authDialog").close();
       await loadSignedInReader();
     } catch (err) {
+      if (authDialog && !authDialog.open) showAuthDialog();
       status.textContent = err.message;
+    } finally {
+      if (submitButton) submitButton.disabled = false;
     }
   });
 }
 
 function showAuthDialog() {
+  readerPlaybackRequest++;
+  pauseBookStream(0);
+  cancelPendingAssistantSpeech();
+  librarySpeechRequest++;
+  store.isReadingBook = false;
+  store.isPlayingWelcome = false;
+  store.isBookPausedForDoubt = false;
+  store.isRecordingDoubt = false;
+  store.sentenceAudioCache.clear();
+  setDoubtFlowActive(false);
+  setMicButtonState(false);
+  store.currentBookId = null;
+  store.currentParagraphIdx = 0;
+  store.currentSentenceIdx = 0;
+  store.serverData = {
+    welcome_script: "",
+    pdf_title: "Sign in to open your library",
+    paragraphs: [],
+    doubt_history: []
+  };
+  renderReaderView(false);
+  void releaseMicCapture().catch(() => {});
   store.isAuthenticated = false;
-  const profileButton = document.getElementById("btnProfile");
-  if (profileButton) profileButton.disabled = true;
-  document.getElementById("btnLibrary").disabled = true;
+  syncInteractionControls();
   const dialog = document.getElementById("authDialog");
   if (dialog && !dialog.open) dialog.showModal();
 }
@@ -686,16 +841,26 @@ function showAuthDialog() {
 async function loadSignedInReader() {
   store.serverData = await fetchSessionState();
   store.isAuthenticated = true;
-  const profileButton = document.getElementById("btnProfile");
-  if (profileButton) profileButton.disabled = false;
-  document.getElementById("btnLibrary").disabled = false;
+  syncInteractionControls();
   store.currentBookId = store.serverData.book_id || null;
   store.currentParagraphIdx = store.serverData.current_paragraph_index || 0;
   store.currentSentenceIdx = store.serverData.current_sentence_index || 0;
   const label = document.getElementById("profileButtonLabel");
   if (label) label.textContent = store.serverData.profile?.display_name || "Profile";
+  warmMicrophone();
   renderReaderView(false);
   setStatusBadge("Signed in • Press S to start reading", "idle");
+  maybePlayOpeningGuide();
+}
+
+function warmMicrophone() {
+  const note = document.getElementById("micReadinessNote");
+  if (note) note.textContent = "Preparing the microphone for faster doubts…";
+  prepareMicCapture().then(() => {
+    if (note) note.textContent = "Microphone is muted and ready for faster doubts. Your browser may show its microphone-use indicator while you’re signed in.";
+  }).catch(() => {
+    if (note) note.textContent = "Microphone is not ready yet. Press Space and allow microphone access when prompted.";
+  });
 }
 
 async function openLibrary() {
@@ -721,11 +886,13 @@ async function openLibrary() {
       empty.className = "library-empty";
       empty.textContent = "Your library is empty. Upload a text-based PDF to add your first book.";
       list.appendChild(empty);
+      document.getElementById("libraryActionStatus").textContent = "";
       return;
     }
     books.forEach((book) => {
       const item = document.createElement("article");
       item.className = "library-book-item";
+      item.dataset.bookId = book.id;
       const info = document.createElement("div");
       info.className = "library-book-info";
       const title = document.createElement("h3");
@@ -763,6 +930,13 @@ async function openLibrary() {
         } catch (err) {
           button.disabled = false;
           button.textContent = "Continue reading";
+          if (err.status === 401) {
+            dialog.close();
+            store.isAuthenticated = false;
+            showAuthDialog();
+            setStatusBadge("Your session expired. Please sign in again.", "error");
+            return;
+          }
           meta.textContent = err.message;
         }
       });
@@ -772,26 +946,124 @@ async function openLibrary() {
     });
     list.querySelector(".library-continue-button")?.focus();
   } catch (err) {
+    if (err.status === 401) {
+      dialog.close();
+      store.isAuthenticated = false;
+      showAuthDialog();
+      setStatusBadge("Your session expired. Please sign in again.", "error");
+      return;
+    }
     list.textContent = err.message;
   }
 }
 
-async function speakLibraryBookTitle(title) {
+function selectedLibraryBook(dialog) {
+  const focused = document.activeElement?.closest?.(".library-book-item");
+  const selected = focused || dialog.querySelector(".library-book-item.library-book-selected")
+    || dialog.querySelector(".library-book-item");
+  if (!selected?.dataset.bookId) return null;
+  return {
+    id: selected.dataset.bookId,
+    title: selected.querySelector(".library-book-title")?.textContent || "this book",
+  };
+}
+
+async function speakLibraryMessage(message) {
   const requestId = ++librarySpeechRequest;
   stopAssistantAudio();
   try {
-    const audio = await requestTTS(title, "en-IN", getSelectedVoice());
+    const audio = await requestTTS(message, "en-IN", getSelectedVoice());
     if (requestId !== librarySpeechRequest || !document.getElementById("libraryDialog")?.open) return;
     playAssistantBase64(audio);
   } catch {
-    // Book navigation remains usable if title speech is temporarily unavailable.
+    if (requestId !== librarySpeechRequest || !document.getElementById("libraryDialog")?.open) return;
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(message));
+    }
   }
+}
+
+function cancelLibraryDeletion() {
+  if (!pendingLibraryDeletion) return;
+  pendingLibraryDeletion = null;
+  const closeButton = document.getElementById("btnCloseLibrary");
+  if (closeButton) closeButton.disabled = false;
+  const status = document.getElementById("libraryActionStatus");
+  if (status) status.textContent = "Removal cancelled.";
+  void speakLibraryMessage("Removal cancelled.");
+}
+
+async function confirmLibraryDeletion() {
+  if (!pendingLibraryDeletion || pendingLibraryDeletion.deleting) return;
+  const pending = pendingLibraryDeletion;
+  pending.deleting = true;
+  const status = document.getElementById("libraryActionStatus");
+  const closeButton = document.getElementById("btnCloseLibrary");
+  if (closeButton) closeButton.disabled = true;
+  if (status) status.textContent = `Removing ${pending.title}…`;
+  librarySpeechRequest++;
+  stopAssistantAudio();
+  try {
+    await deleteBook(pending.id);
+  } catch (err) {
+    pendingLibraryDeletion = null;
+    if (closeButton) closeButton.disabled = false;
+    if (status) status.textContent = `Could not remove ${pending.title}. ${err.message}`;
+    void speakLibraryMessage(`Could not remove ${pending.title}. Please try again.`);
+    return;
+  }
+
+  pendingLibraryDeletion = null;
+  if (closeButton) closeButton.disabled = false;
+  const item = [...document.querySelectorAll("#libraryDialog .library-book-item")]
+    .find((entry) => entry.dataset.bookId === pending.id);
+  item?.remove();
+  if (store.currentBookId === pending.id) {
+    try {
+      const data = await fetchSessionState();
+      store.serverData = data;
+      store.currentBookId = data.book_id || null;
+      store.currentParagraphIdx = data.current_paragraph_index || 0;
+      store.currentSentenceIdx = data.current_sentence_index || 0;
+      store.sentenceAudioCache.clear();
+      renderReaderView(false);
+    } catch {
+      store.currentBookId = null;
+      setStatusBadge("The book was removed, but the reader could not refresh. Please reload the page.", "error");
+    }
+  }
+  const list = document.getElementById("libraryBookList");
+  if (list && !list.querySelector(".library-book-item")) {
+    const empty = document.createElement("p");
+    empty.className = "library-empty";
+    empty.textContent = "Your library is empty. Upload a text-based PDF to add your first book.";
+    list.replaceChildren(empty);
+  }
+  if (status) status.textContent = `${pending.title} was removed from your library.`;
+  list?.querySelector(".library-continue-button")?.focus();
+  void speakLibraryMessage(`${pending.title} has been removed from your library.`);
+}
+
+async function speakLibraryBookTitle(title) {
+  await speakLibraryMessage(title);
 }
 
 function bindKeyboardController() {
   window.addEventListener("keydown", async (event) => {
     const libraryDialog = document.getElementById("libraryDialog");
     if (libraryDialog?.open) {
+      if (pendingLibraryDeletion) {
+        if (event.key === "Escape" && !pendingLibraryDeletion.deleting) {
+          event.preventDefault();
+          cancelLibraryDeletion();
+        } else if (event.key.toLowerCase() === "r" && !event.repeat) {
+          event.preventDefault();
+          await confirmLibraryDeletion();
+        } else {
+          event.preventDefault();
+        }
+        return;
+      }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const buttons = [...libraryDialog.querySelectorAll(".library-continue-button:not(:disabled)")];
@@ -811,6 +1083,20 @@ function bindKeyboardController() {
         stopAssistantAudio();
         libraryDialog.close();
         document.getElementById("pdfFileInput")?.click();
+      } else if (event.key.toLowerCase() === "r" && !event.repeat) {
+        event.preventDefault();
+        const book = selectedLibraryBook(libraryDialog);
+        const status = document.getElementById("libraryActionStatus");
+        if (!book) {
+          if (status) status.textContent = "There is no book to remove.";
+          void speakLibraryMessage("There is no book to remove.");
+          return;
+        }
+        pendingLibraryDeletion = { ...book, deleting: false };
+        const closeButton = document.getElementById("btnCloseLibrary");
+        if (closeButton) closeButton.disabled = true;
+        if (status) status.textContent = `Press R again to remove ${book.title}, or Escape to cancel.`;
+        void speakLibraryMessage(`To remove ${book.title}, press R again. To cancel, press Escape.`);
       }
       return;
     }
@@ -831,6 +1117,21 @@ function bindKeyboardController() {
     }
 
     if (store.isDoubtFlowActive || store.isDocumentLoading) return;
+
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      const rate = adjustBookPlaybackRate(event.key === "ArrowUp" ? 1 : -1);
+      const directionHint = rate >= 1.5
+        ? "Maximum speed."
+        : rate <= 0.8
+          ? "Minimum speed."
+          : "Up to speed up, Down to slow down.";
+      setStatusBadge(
+        `Reading speed ${rate.toFixed(1)} times. ${directionHint}`,
+        store.isReadingBook ? "reading" : "idle"
+      );
+      return;
+    }
 
     if (event.code === "ArrowLeft" || event.code === "ArrowRight") {
       event.preventDefault();
@@ -859,6 +1160,10 @@ function bindKeyboardController() {
       await replayWelcomeGuide();
     } else if (key === "u") {
       event.preventDefault();
+      if (!store.isAuthenticated) {
+        showAuthDialog();
+        return;
+      }
       document.getElementById("pdfFileInput")?.click();
     }
   });
