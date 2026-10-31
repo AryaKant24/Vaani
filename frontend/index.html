@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Vani — Deep Ocean Accessible Voice PDF Reader</title>
+  <title>Vani</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <!-- Editorial headings and readable interface type -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -78,17 +79,18 @@
           <path d="M10 10 A11 11 0 0 1 26 10" stroke="#7dd3fc" stroke-width="2.2" fill="none" stroke-linecap="round" />
           <path d="M6 6 A17 17 0 0 1 30 6" stroke="#38bdf8" stroke-width="1.8" stroke-opacity="0.65" fill="none" stroke-linecap="round" />
           <path d="M10 26 A11 11 0 0 0 26 26" stroke="#7dd3fc" stroke-width="2.2" fill="none" stroke-linecap="round" />
+          <path d="M6 30 A17 17 0 0 0 30 30" stroke="#38bdf8" stroke-width="1.8" stroke-opacity="0.65" fill="none" stroke-linecap="round" />
         </svg>
         <span class="brand-title">VANI</span>
         <span class="wcag-badge">ECHOLOCATION READER • WCAG AAA</span>
       </div>
 
-      <p class="brand-descriptor">Read. Listen. Explore.</p>
+      <p class="brand-descriptor">Listen, Ask, Explore.</p>
     </div>
 
     <div class="header-controls">
       <div id="langIndicatorCard" class="lang-indicator-card">
-        <span class="control-label">Doubt language</span>
+        <span class="control-label">Response Language</span>
         <span id="activeLangDisplay" aria-live="polite" class="active-lang-value">
           English / Hinglish (en-IN)
         </span>
@@ -162,6 +164,7 @@
       <p class="control-label">YOUR BOOKS</p>
       <h2 id="libraryTitle">My Library</h2>
       <p class="library-intro">Use ↑ and ↓ to browse books. Vani reads each title aloud. Press Enter to continue, U to upload, or R to remove the selected book. Press R again to confirm removal or Escape to cancel.</p>
+      <input type="file" id="pdfFileInput" accept="application/pdf" class="hidden" aria-label="Upload PDF book" />
       <div id="libraryBookList" class="library-book-list" aria-live="polite"></div>
       <p id="libraryActionStatus" class="library-intro" role="status" aria-live="polite"></p>
     </div>
@@ -180,7 +183,7 @@
   </details>
 
   <!-- Glass Toolbar Bar -->
-  <section class="toolbar-bar" role="region" aria-label="Document Upload and Playback Controls">
+  <section class="toolbar-bar" role="region" aria-label="Document and Playback Controls">
     <div class="pdf-info">
       <h2 id="pdfTitleDisplay" class="pdf-title" title="Loading document...">
         Loading document...
@@ -194,25 +197,6 @@
         </svg>
         <span>My Library</span>
       </button>
-      <input
-        type="file"
-        id="pdfFileInput"
-        accept="application/pdf"
-        class="hidden"
-        aria-label="Upload PDF File"
-      />
-      <button
-        id="btnUploadPdf"
-        type="button"
-        class="btn-upload"
-        aria-label="Upload PDF Book (Shortcut: U key)"
-      >
-        <svg class="btn-icon" viewBox="0 0 20 20" aria-hidden="true">
-          <path d="M10 3v10m0-10L6 7m4-4l4 4M4 15h12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>Upload PDF <kbd>U</kbd></span>
-      </button>
-
       <button
         id="btnToggleRead"
         type="button"

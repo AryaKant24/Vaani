@@ -8,7 +8,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from psycopg.errors import UniqueViolation
@@ -51,7 +51,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="Vani — Deep Ocean Accessible PDF Reader",
+    title="Vani",
     description="Voice-First PDF Reader & Multilingual Doubt Tutor powered by Gnani.ai",
     version="3.0.0",
     lifespan=lifespan,
@@ -81,12 +81,13 @@ app.mount("/css", StaticFiles(directory=str(FRONTEND_DIR / "css")), name="css")
 app.mount("/js", StaticFiles(directory=str(FRONTEND_DIR / "js")), name="js")
 
 WELCOME_SCRIPT = (
-    "Welcome to Vani Interactive Book Reader. "
+    "Welcome to Vani. Hope you are having a great day!"
     "Press Spacebar to skip this introduction. Press S when you are ready to start reading. "
-    "Use A and D to move between paragraphs, and the Up and Down arrow keys to change reading speed. "
-    "Press F to change the language used for doubt answers, and L to open your library. "
+    "Use A and D to move between paragraphs, and the Up and Down arrow keys to change reading speed and the Left and Right arrow keys to fast forward or go behind."
+    "Press F to change the language used for doubt answers, and L to open your library. Press U to upload books in the library. "
     "While Vani is reading, press Spacebar to pause and ask a doubt. "
     "After answering in your chosen language, Vani resumes from the sentence where it left off."
+    "Press H to hear this introduction again."
 )
 
 SAMPLE_TEXT = (
@@ -156,6 +157,14 @@ async def serve_frontend() -> HTMLResponse:
     if not index_path.exists():
         return HTMLResponse("<h1>Frontend index.html not found.</h1>", status_code=404)
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+async def serve_favicon() -> FileResponse:
+    favicon_path = FRONTEND_DIR / "favicon.svg"
+    if not favicon_path.exists():
+        raise HTTPException(status_code=404, detail="Favicon not found.")
+    return FileResponse(favicon_path, media_type="image/svg+xml")
 
 
 @app.get("/api/state")

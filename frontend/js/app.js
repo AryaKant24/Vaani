@@ -380,7 +380,7 @@ function setDocumentLoading(loading) {
 function syncInteractionControls() {
   const locked = store.isDoubtFlowActive || store.isDocumentLoading;
   const requiresAccount = !store.isAuthenticated;
-  ["btnToggleRead", "btnPrevChunk", "btnNextChunk", "sectionSeek", "btnUploadPdf", "voiceSelect"]
+  ["btnToggleRead", "btnPrevChunk", "btnNextChunk", "sectionSeek", "voiceSelect"]
     .forEach((id) => {
       const control = document.getElementById(id);
       if (control) control.disabled = locked || requiresAccount;
@@ -538,6 +538,7 @@ async function handlePdfSelection(event) {
   if (store.isDoubtFlowActive || store.isDocumentLoading) return;
   const file = event.target.files?.[0];
   if (!file) return;
+  event.target.value = "";
 
   readerPlaybackRequest++;
   pauseBookStream(0);
@@ -560,6 +561,7 @@ async function handlePdfSelection(event) {
     setDocumentLoading(false);
 
     setStatusBadge(`Added to My Library • Page 1 • Press S to start reading`, "idle");
+    await openLibrary();
   } catch (err) {
     setDocumentLoading(false);
     if (err.status === 401) {
@@ -674,15 +676,7 @@ function bindUIEvents() {
     renderReaderView(false);
   });
 
-  const fileInput = document.getElementById("pdfFileInput");
-  document.getElementById("btnUploadPdf")?.addEventListener("click", () => {
-    if (!store.isAuthenticated) {
-      showAuthDialog();
-      return;
-    }
-    fileInput?.click();
-  });
-  fileInput?.addEventListener("change", handlePdfSelection);
+  document.getElementById("pdfFileInput")?.addEventListener("change", handlePdfSelection);
 }
 
 function setupProfileDialog() {
