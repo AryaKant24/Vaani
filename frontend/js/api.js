@@ -56,7 +56,7 @@ export async function checkLlmConnection() {
   return apiJson("/api/llm-status");
 }
 
-export async function requestTTS(text, language = "en-IN", voice = "Shlok") {
+export async function requestTTS(text, language = "en-IN", voice = "shubh") {
   const data = await apiJson("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

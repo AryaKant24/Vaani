@@ -8,7 +8,7 @@ mid-reading, explains the interrupted passage, and resumes from that sentence.
 
 - **Backend:** Python, FastAPI, Uvicorn, Pydantic Settings, `pypdf`
 - **Frontend:** HTML, CSS, vanilla JavaScript ES modules, Web Audio API
-- **Speech:** Gnani Vachana STT and Timbre TTS
+- **Speech:** Sarvam Saaras STT and Bulbul TTS
 - **Reasoning:** OpenAI-compatible chat-completions API (Groq by default)
 - **Storage:** PostgreSQL book library and reading progress; local TTS cache in
   `assets/audio_cache/`
@@ -17,15 +17,16 @@ mid-reading, explains the interrupted passage, and resumes from that sentence.
 
 | Purpose | Default |
 | --- | --- |
-| Speech-to-text | Gnani Vachana |
-| Text-to-speech | Gnani Timbre `timbre-v2.5` |
+| Speech-to-text | Sarvam Saaras `saaras:v4` |
+| Text-to-speech | Sarvam Bulbul `bulbul:v3` |
 | Explanation generation | `openai/gpt-oss-120b` on Groq |
 
 Supported doubt languages are English (`en-IN`), Hindi (`hi-IN`), Marathi
 (`mr-IN`), Tamil (`ta-IN`), Telugu (`te-IN`), and Kannada (`kn-IN`).
-Available voices are `Shlok` (male, English) and `Nalini` (female, Hindi). The
-selected voice is saved in the browser and used for reading, announcements,
-library titles, and doubt answers.
+Available Sarvam voices are `shubh` (male) and `neha` (female). The selected
+voice is saved in the browser and used for reading, announcements, library
+titles, and doubt answers. Older saved Gnani voice preferences are mapped to
+their Sarvam equivalents.
 
 ## User flow
 
@@ -59,8 +60,8 @@ and briefly play at 2×. `Space` pauses reading to ask or send a doubt.
 ```text
 PDF -> pypdf -> sentence/paragraph chunks -> TTS -> browser playback
 
-Microphone WAV -> Gnani STT -> contextual LLM explanation
-               -> Gnani TTS -> browser playback -> resume sentence
+Microphone WAV -> Sarvam STT -> contextual LLM explanation
+               -> Sarvam TTS -> browser playback -> resume sentence
 ```
 
 The API is provided by `backend/main.py`:
@@ -114,7 +115,7 @@ if (!(Test-Path .env)) { Copy-Item .env.example .env }
    `postgresql://vani_app:choose_a_password@127.0.0.1:5432/vani` (URL-encode
    special characters in the password) and set `SESSION_SECRET` to the output
    of `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Add your
-   Gnani and reasoning-provider API keys as needed.
+   Sarvam and reasoning-provider API keys as needed.
 
 Start Vani after saving `.env`:
 
@@ -141,7 +142,7 @@ if [ ! -f .env ]; then cp .env.example .env; fi
 ```
 
 Edit `.env` after copying it. Set `DATABASE_URL` to the PostgreSQL connection
-URL above, paste the generated value into `SESSION_SECRET`, and add the Gnani
+URL above, paste the generated value into `SESSION_SECRET`, and add the Sarvam
 and reasoning-provider API keys as needed. Start Vani after saving `.env`:
 
 ```bash
@@ -158,15 +159,20 @@ Set `SESSION_HTTPS_ONLY=true` when hosting behind HTTPS.
 
 ```dotenv
 DATABASE_URL=postgresql://vani_app:choose_a_password@127.0.0.1:5432/vani
-GNANI_API_KEY=your_gnani_key
+SARVAM_API_KEY=your_sarvam_key
 GNANI_EVON_URL=https://api.groq.com/openai/v1/chat/completions
 GROQ_API_KEY=your_groq_key
 LLM_MODEL=openai/gpt-oss-120b
-TTS_MODEL=timbre-v2.5
+SARVAM_STT_MODEL=saaras:v4
+TTS_MODEL=bulbul:v3
 DEFAULT_LANGUAGE=en-IN
-DEFAULT_VOICE=Shlok
+DEFAULT_VOICE=shubh
 ```
 
 For another OpenAI-compatible provider, use its endpoint and set
 `LLM_API_KEY` (or `GEMINI_API_KEY` for a Google Generative Language endpoint).
 Never commit `.env` or real API keys.
+
+Sarvam speech requests use the synchronous REST endpoints, which accept
+recordings shorter than 30 seconds. Bulbul returns base64-encoded WAV audio;
+Vani decodes it before caching and playback.

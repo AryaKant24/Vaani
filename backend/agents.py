@@ -1,6 +1,6 @@
 import logging
 from typing import Dict
-from backend.services import gnani_service
+from backend.services import sarvam_service
 
 logger = logging.getLogger("vani.agents")
 
@@ -65,7 +65,7 @@ class VaniStudyAgent:
             f"Provide a clear, thoughtful explanation in {lang_info['name']} ({lang_info['script_rule']}):"
         )
 
-        explanation = await gnani_service.generate_evon_response(
+        explanation = await sarvam_service.generate_evon_response(
             system_prompt=system_prompt,
             user_text=user_prompt,
             temperature=0.35,

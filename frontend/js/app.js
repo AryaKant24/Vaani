@@ -162,7 +162,7 @@ function maybePlayOpeningGuide() {
 }
 
 function getSelectedVoice() {
-  return document.getElementById("voiceSelect")?.value || "Shlok";
+  return document.getElementById("voiceSelect")?.value || "shubh";
 }
 
 function cancelPendingAssistantSpeech() {
@@ -628,9 +628,13 @@ function bindUIEvents() {
   if (voiceSelect) {
     try {
       const savedVoice = localStorage.getItem(VOICE_PREFERENCE_KEY);
-      const savedOption = [...voiceSelect.options].find((option) => option.value === savedVoice);
+      const legacyVoices = { shlok: "shubh", mohan: "shubh", nalini: "neha" };
+      const normalizedVoice = legacyVoices[savedVoice?.toLowerCase()] || savedVoice;
+      const savedOption = [...voiceSelect.options].find((option) => option.value === normalizedVoice);
       if (savedOption) voiceSelect.value = savedOption.value;
-      else if (savedVoice?.toLowerCase() === "mohan") voiceSelect.value = "Shlok";
+      if (savedOption && normalizedVoice !== savedVoice) {
+        localStorage.setItem(VOICE_PREFERENCE_KEY, savedOption.value);
+      }
     } catch (_) {
       // The dropdown still works when browser storage is disabled.
     }

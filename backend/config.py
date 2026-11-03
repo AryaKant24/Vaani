@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
     SESSION_SECRET: str = ""
     SESSION_HTTPS_ONLY: bool = False
-    GNANI_API_KEY: str = ""
+    SARVAM_API_KEY: str = ""
+    SARVAM_STT_MODEL: str = "saaras:v4"
     GNANI_EVON_URL: str = "https://api.groq.com/openai/v1/chat/completions"
 
     LLM_API_KEY: str = ""
@@ -24,8 +25,8 @@ class Settings(BaseSettings):
 
     LLM_MODEL: str = "llama-3.3-70b-versatile"
     DEFAULT_LANGUAGE: str = "en-IN"
-    DEFAULT_VOICE: str = "Shlok"
-    TTS_MODEL: str = "timbre-v2.5"
+    DEFAULT_VOICE: str = "shubh"
+    TTS_MODEL: str = "bulbul:v3"
 
     @field_validator("*", mode="before")
     @classmethod
@@ -60,7 +61,7 @@ class Settings(BaseSettings):
         elif "googleapis.com" in url or "generativelanguage" in url:
             candidates = (self.GEMINI_API_KEY, self.LLM_API_KEY)
         else:
-            candidates = (self.LLM_API_KEY, self.GNANI_API_KEY)
+            candidates = (self.LLM_API_KEY,)
 
         unique: list[str] = []
         for key in candidates:

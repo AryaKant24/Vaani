@@ -22,7 +22,7 @@ from backend import database
 from backend.services import (
     InvalidUpstreamCredentialsError,
     InvalidTTSRequestError,
-    gnani_service,
+    sarvam_service,
 )
 
 logger = logging.getLogger("vani.main")
@@ -47,12 +47,12 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
-        await gnani_service.close()
+        await sarvam_service.close()
 
 
 app = FastAPI(
     title="Vani",
-    description="Voice-First PDF Reader & Multilingual Doubt Tutor powered by Gnani.ai",
+    description="Voice-First PDF Reader & Multilingual Doubt Tutor powered by Sarvam AI",
     version="3.0.0",
     lifespan=lifespan,
 )
@@ -111,7 +111,7 @@ SESSION_STATE: Dict[str, Any] = {
 class TTSRequest(BaseModel):
     text: str
     language: Optional[str] = "en-IN"
-    voice: Optional[str] = "Shlok"
+    voice: Optional[str] = "shubh"
 
 
 class RegisterRequest(BaseModel):
@@ -312,7 +312,7 @@ async def update_reading_progress(
 async def check_llm_status(request: Request) -> Dict[str, Any]:
     require_user(request)
     try:
-        await gnani_service.generate_evon_response(
+        await sarvam_service.generate_evon_response(
             system_prompt="Reply with the single word OK.",
             user_text="Ping",
             max_tokens=1,
@@ -339,7 +339,7 @@ async def synthesize_speech(req: TTSRequest, request: Request) -> Dict[str, str]
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
     try:
-        audio_bytes = await gnani_service.text_to_speech(
+        audio_bytes = await sarvam_service.text_to_speech(
             text=req.text, language=req.language, voice=req.voice
         )
         return {"audio_base64": _encode_audio_b64(audio_bytes)}
@@ -392,7 +392,7 @@ async def process_study_doubt(
     paragraph_index: int = Form(...),
     sentence_index: int = Form(...),
     language: str = Form("en-IN"),
-    voice: str = Form("Shlok"),
+    voice: str = Form("shubh"),
     book_id: Optional[str] = Form(None),
     audio: UploadFile = File(...),
 ) -> Dict[str, Any]:
@@ -415,7 +415,7 @@ async def process_study_doubt(
     audio_bytes = await audio.read()
 
     try:
-        student_question = await gnani_service.speech_to_text(
+        student_question = await sarvam_service.speech_to_text(
             audio_bytes=audio_bytes, filename="study_doubt.wav", language=language
         )
     except Exception as exc:
@@ -442,7 +442,7 @@ async def process_study_doubt(
         raise HTTPException(status_code=502, detail="Voice explanations are temporarily unavailable.") from exc
 
     try:
-        tts_bytes = await gnani_service.text_to_speech(
+        tts_bytes = await sarvam_service.text_to_speech(
             text=explanation, language=language, voice=voice
         )
     except InvalidTTSRequestError as exc:
