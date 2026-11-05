@@ -22,7 +22,7 @@ from backend import database
 from backend.services import (
     InvalidUpstreamCredentialsError,
     InvalidTTSRequestError,
-    sarvam_service,
+    speech_service,
 )
 
 logger = logging.getLogger("vani.main")
@@ -47,12 +47,12 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
-        await sarvam_service.close()
+        await speech_service.close()
 
 
 app = FastAPI(
     title="Vani",
-    description="Voice-First PDF Reader & Multilingual Doubt Tutor powered by Sarvam AI",
+    description="Voice-First PDF Reader & Multilingual Doubt Tutor powered by Gnani AI",
     version="3.0.0",
     lifespan=lifespan,
 )
@@ -84,9 +84,9 @@ WELCOME_SCRIPT = (
     "Welcome to Vani. Hope you are having a great day!"
     "Press Spacebar to skip this introduction. Press S when you are ready to start reading. "
     "Use A and D to move between paragraphs, and the Up and Down arrow keys to change reading speed and the Left and Right arrow keys to fast forward or go behind."
-    "Press F to change the language used for doubt answers, and L to open your library. Press U to upload books in the library. "
+    "Press F to change the speaking voice, and L to open your library. Press U to upload books in the library. "
     "While Vani is reading, press Spacebar to pause and ask a doubt. "
-    "After answering in your chosen language, Vani resumes from the sentence where it left off."
+    "Ask in any supported Indian language or English; Vani detects your language, answers in it, and resumes from the sentence where it left off."
     "Press H to hear this introduction again."
 )
 
@@ -110,8 +110,8 @@ SESSION_STATE: Dict[str, Any] = {
 
 class TTSRequest(BaseModel):
     text: str
-    language: Optional[str] = "en-IN"
-    voice: Optional[str] = "shubh"
+    language: Optional[str] = "auto"
+    voice: Optional[str] = "Avinash"
 
 
 class RegisterRequest(BaseModel):
@@ -149,6 +149,27 @@ def public_profile(user_id: str) -> dict[str, Any]:
 
 def _encode_audio_b64(audio_bytes: bytes) -> str:
     return base64.b64encode(audio_bytes).decode("utf-8")
+
+
+def _story_keyterms(title: str, passage: str) -> list[str]:
+    """Extract likely names and acronyms from the active story context for Prisma."""
+    text = f"{title} {passage}"
+    candidates = re.findall(
+        r"\b(?:[A-Z][a-z]+(?:['’\-][A-Z]?[a-z]+)*(?:\s+[A-Z][a-z]+(?:['’\-][A-Z]?[a-z]+)*)*|[A-Z]{2,})\b",
+        text,
+    )
+    ignored = {"The", "A", "An", "And", "But", "When", "While", "After", "Before", "This", "That", "It", "He", "She", "They"}
+    unique: list[str] = []
+    seen: set[str] = set()
+    for term in candidates:
+        term = term.strip()
+        folded = term.casefold()
+        if term not in ignored and folded not in seen:
+            unique.append(term)
+            seen.add(folded)
+        if len(unique) == 30:
+            break
+    return unique
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -312,7 +333,7 @@ async def update_reading_progress(
 async def check_llm_status(request: Request) -> Dict[str, Any]:
     require_user(request)
     try:
-        await sarvam_service.generate_evon_response(
+        await speech_service.generate_evon_response(
             system_prompt="Reply with the single word OK.",
             user_text="Ping",
             max_tokens=1,
@@ -339,7 +360,7 @@ async def synthesize_speech(req: TTSRequest, request: Request) -> Dict[str, str]
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
     try:
-        audio_bytes = await sarvam_service.text_to_speech(
+        audio_bytes = await speech_service.text_to_speech(
             text=req.text, language=req.language, voice=req.voice
         )
         return {"audio_base64": _encode_audio_b64(audio_bytes)}
@@ -391,8 +412,7 @@ async def process_study_doubt(
     request: Request,
     paragraph_index: int = Form(...),
     sentence_index: int = Form(...),
-    language: str = Form("en-IN"),
-    voice: str = Form("shubh"),
+    voice: str = Form("Avinash"),
     book_id: Optional[str] = Form(None),
     audio: UploadFile = File(...),
 ) -> Dict[str, Any]:
@@ -415,9 +435,18 @@ async def process_study_doubt(
     audio_bytes = await audio.read()
 
     try:
-        student_question = await sarvam_service.speech_to_text(
-            audio_bytes=audio_bytes, filename="study_doubt.wav", language=language
+        title = str(book.get("title") or book.get("pdf_title") or "") if book_id else SESSION_STATE["pdf_title"]
+        story_context = f"Book/story: {title}. Passage: {para_obj['full_text']}"
+        keyterms = _story_keyterms(title, para_obj["full_text"])
+        transcription = await speech_service.speech_to_text(
+            audio_bytes=audio_bytes,
+            filename="study_doubt.wav",
+            language="indic-auto",
+            topic=story_context[:1600],
+            keyterms=keyterms,
         )
+        student_question = transcription["transcript"]
+        language = transcription["language"]
     except Exception as exc:
         logger.error("STT request failed | error_type=%s", type(exc).__name__)
         raise HTTPException(status_code=502, detail="Voice transcription is temporarily unavailable.") from exc
@@ -442,8 +471,11 @@ async def process_study_doubt(
         raise HTTPException(status_code=502, detail="Voice explanations are temporarily unavailable.") from exc
 
     try:
-        tts_bytes = await sarvam_service.text_to_speech(
-            text=explanation, language=language, voice=voice
+        speech_language = language if language in {
+            "en-IN", "hi-IN", "bn-IN", "gu-IN", "kn-IN", "ml-IN", "mr-IN", "pa-IN", "ta-IN", "te-IN"
+        } else "auto"
+        tts_bytes = await speech_service.text_to_speech(
+            text=explanation, language=speech_language, voice=voice
         )
     except InvalidTTSRequestError as exc:
         raise HTTPException(
@@ -458,6 +490,11 @@ async def process_study_doubt(
         "paragraph_index": paragraph_index,
         "sentence_index": safe_sent_idx,
         "language": language,
+        "language_name": {
+            "en-IN": "English", "hi-IN": "Hindi", "bn-IN": "Bengali", "gu-IN": "Gujarati",
+            "kn-IN": "Kannada", "ml-IN": "Malayalam", "mr-IN": "Marathi", "pa-IN": "Punjabi",
+            "ta-IN": "Tamil", "te-IN": "Telugu",
+        }.get(language.split(",", 1)[0].strip(), language),
         "student_question": student_question,
         "explanation": explanation,
         "audio_base64": _encode_audio_b64(tts_bytes),

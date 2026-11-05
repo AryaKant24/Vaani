@@ -1,6 +1,6 @@
 import logging
 from typing import Dict
-from backend.services import sarvam_service
+from backend.services import speech_service
 
 logger = logging.getLogger("vani.agents")
 
@@ -11,23 +11,39 @@ LANGUAGE_CONFIG: Dict[str, Dict[str, str]] = {
     },
     "hi-IN": {
         "name": "conversational Hindi",
-        "script_rule": "Write strictly in Hindi using Devanagari script (हिंदी देवनागरी लिपि). Do NOT write in English.",
+        "script_rule": "Use Devanagari script (हिंदी देवनागरी लिपि), retaining English words when the student code-switches into English.",
     },
     "mr-IN": {
         "name": "conversational Marathi",
-        "script_rule": "Write strictly in Marathi using Devanagari script (मराठी देवनागरी लिपी). Do NOT write in English.",
+        "script_rule": "Use Devanagari script (मराठी देवनागरी लिपी), retaining English words when the student code-switches into English.",
     },
     "ta-IN": {
         "name": "conversational Tamil",
-        "script_rule": "Write strictly in Tamil script (தமிழ்). Do NOT write in English.",
+        "script_rule": "Use Tamil script (தமிழ்), retaining English words when the student code-switches into English.",
     },
     "te-IN": {
         "name": "conversational Telugu",
-        "script_rule": "Write strictly in Telugu script (తెలుగు). Do NOT write in English.",
+        "script_rule": "Use Telugu script (తెలుగు), retaining English words when the student code-switches into English.",
     },
     "kn-IN": {
         "name": "conversational Kannada",
-        "script_rule": "Write strictly in Kannada script (ಕನ್ನಡ). Do NOT write in English.",
+        "script_rule": "Use Kannada script (ಕನ್ನಡ), retaining English words when the student code-switches into English.",
+    },
+    "bn-IN": {
+        "name": "conversational Bengali",
+        "script_rule": "Write in Bengali script (বাংলা), retaining English words only when the student's question code-switches into English.",
+    },
+    "gu-IN": {
+        "name": "conversational Gujarati",
+        "script_rule": "Write in Gujarati script (ગુજરાતી), retaining English words only when the student's question code-switches into English.",
+    },
+    "ml-IN": {
+        "name": "conversational Malayalam",
+        "script_rule": "Write in Malayalam script (മലയാളം), retaining English words only when the student's question code-switches into English.",
+    },
+    "pa-IN": {
+        "name": "conversational Punjabi",
+        "script_rule": "Write in Gurmukhi script (ਪੰਜਾਬੀ), retaining English words only when the student's question code-switches into English.",
     },
 }
 
@@ -35,7 +51,7 @@ STUDY_TUTOR_PROMPT = """You are Vani, an intelligent and empathetic audio tutor 
 The student is listening to a book and interrupted at a specific sentence to ask a doubt.
 
 STRICT INSTRUCTIONS:
-1. TARGET LANGUAGE: {target_language}. {script_rule}
+1. TARGET LANGUAGE: Match the language and any code-switching used in the student's spoken question. The speech recognizer detected {target_language}. {script_rule}
 2. DO NOT repeat or read back the book paragraph verbatim. Actually THINK about the student's question and explain the concept using a simple analogy or clear breakdown.
 3. Keep your response to 2 or 3 natural spoken sentences so the student can quickly understand and resume their book.
 4. NEVER use markdown symbols (*, #, `, bullet points) because your text is sent directly to a Text-to-Speech engine."""
@@ -51,7 +67,8 @@ class VaniStudyAgent:
         student_question: str,
         language: str = "en-IN",
     ) -> str:
-        lang_info = LANGUAGE_CONFIG.get(language, LANGUAGE_CONFIG["en-IN"])
+        primary_language = language.split(",", 1)[0].strip()
+        lang_info = LANGUAGE_CONFIG.get(primary_language, LANGUAGE_CONFIG["en-IN"])
 
         system_prompt = STUDY_TUTOR_PROMPT.format(
             target_language=lang_info["name"],
@@ -65,7 +82,7 @@ class VaniStudyAgent:
             f"Provide a clear, thoughtful explanation in {lang_info['name']} ({lang_info['script_rule']}):"
         )
 
-        explanation = await sarvam_service.generate_evon_response(
+        explanation = await speech_service.generate_evon_response(
             system_prompt=system_prompt,
             user_text=user_prompt,
             temperature=0.35,

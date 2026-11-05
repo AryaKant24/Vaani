@@ -1,4 +1,4 @@
-import { store, getCurrentLanguage, getCurrentParagraph } from "./state.js";
+import { store, getCurrentParagraph } from "./state.js";
 
 export function animateIn(element) {
   if (!element) return;
@@ -52,24 +52,7 @@ export function setStatusBadge(text, mode = "idle") {
   }, 90);
 }
 
-export function updateLanguageDisplay(flashGlow = false) {
-  const langObj = getCurrentLanguage();
-  const display = document.getElementById("activeLangDisplay");
-  const miniBadge = document.getElementById("doubtLangBadge");
-  const card = document.getElementById("langIndicatorCard");
-
-  if (display) display.textContent = langObj.label;
-  if (miniBadge) miniBadge.textContent = langObj.code;
-
-  if (flashGlow && card) {
-    card.classList.add("lang-glow-flash");
-    setTimeout(() => card.classList.remove("lang-glow-flash"), 600);
-  }
-}
-
 export function renderReaderView(pingActiveSentence = true) {
-  updateLanguageDisplay(false);
-
   const paragraphs = store.serverData.paragraphs || [];
   const totalParas = paragraphs.length || 1;
   if (store.currentParagraphIdx >= totalParas) store.currentParagraphIdx = 0;
@@ -184,7 +167,7 @@ export function renderDoubtAnswer(data) {
 
   if (rawBox) rawBox.textContent = data.student_question;
   if (formattedBox) formattedBox.textContent = data.explanation;
-  if (langBadge) langBadge.textContent = data.language;
+  if (langBadge) langBadge.textContent = data.language_name || data.language;
 
   animateIn(document.getElementById("transcriptContainer"));
   animateIn(document.getElementById("answerContainer"));

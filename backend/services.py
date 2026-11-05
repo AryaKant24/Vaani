@@ -1,7 +1,6 @@
 import asyncio
-import base64
-import binascii
 import hashlib
+import json
 import logging
 import time
 from pathlib import Path
@@ -20,9 +19,11 @@ from backend.config import AUDIO_CACHE_DIR, settings
 
 logger = logging.getLogger("vani.services")
 logging.basicConfig(level=logging.INFO)
-# Preserve previously saved Vani voice preferences while mapping them to
-# Sarvam Bulbul v3 speakers.
-TTS_VOICE_ALIASES = {"shlok": "shubh", "mohan": "shubh", "nalini": "neha"}
+# Preserve older saved voice preferences when moving to Timbre v3 speakers.
+TTS_VOICE_ALIASES = {
+    "shubh": "Shubham", "shlok": "Shubham", "mohan": "Shubham",
+    "neha": "Shivani", "nalini": "Shivani",
+}
 
 
 class RateLimitExceededError(Exception):
@@ -42,16 +43,17 @@ class InvalidUpstreamCredentialsError(Exception):
     """The configured provider rejected its credential; retries cannot fix it."""
 
 
-class SarvamService:
+class SpeechService:
     """
     Unified asynchronous wrapper for:
-    - Sarvam Saaras (Speech-to-Text)
-    - Sarvam Bulbul (Text-to-Speech with local MD5 WAV cache)
+    - Gnani Prisma v3 (Speech-to-Text)
+    - Gnani Timbre v3 (Text-to-Speech with local WAV cache)
     - External OpenAI-Compatible LLM (Groq / Gemini / Evon)
     """
 
     def __init__(self) -> None:
         self._rate_locks = {name: asyncio.Lock() for name in ("stt", "tts", "llm")}
+        self._gnani_tts_lock = asyncio.Lock()
         self._last_call_ts = {name: 0.0 for name in self._rate_locks}
         self._min_interval: float = 1.05
         self._http_client: Optional[httpx.AsyncClient] = None
@@ -84,7 +86,7 @@ class SarvamService:
     @staticmethod
     def get_tts_cache_path(text: str, language: str, voice: str, model: str) -> Path:
         """Generates a deterministic filename for caching TTS audio."""
-        normalized = f"{text.strip()}|{language.strip()}|{voice.strip()}|{model.strip()}|1.0"
+        normalized = f"gnani|{text.strip()}|{language.strip()}|{voice.strip()}|{model.strip()}"
         digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()
         return AUDIO_CACHE_DIR / f"{digest}.wav"
 
@@ -108,7 +110,7 @@ class SarvamService:
         key_candidates = live_cfg.get_llm_key_candidates()
         llm_model = live_cfg.LLM_MODEL.strip()
 
-        # Auto-correct model name if user switched URL to Groq but left model as "evon3.3"
+        # Auto-correct model name if user switched URL to Groq but left an Evon ID.
         if "groq.com" in llm_url and llm_model == "evon3.3":
             llm_model = "llama-3.3-70b-versatile"
 
@@ -169,11 +171,11 @@ class SarvamService:
         live_cfg = settings
         lang = (language or live_cfg.DEFAULT_LANGUAGE).strip()
         requested_voice = (voice or live_cfg.DEFAULT_VOICE).strip()
-        spk_voice = TTS_VOICE_ALIASES.get(requested_voice.casefold(), requested_voice.casefold())
-        if not live_cfg.SARVAM_API_KEY.strip():
-            raise InvalidUpstreamCredentialsError("SARVAM_API_KEY is not configured.")
+        spk_voice = TTS_VOICE_ALIASES.get(requested_voice.casefold(), requested_voice)
+        if not live_cfg.GNANI_API_KEY_ID.strip():
+            raise InvalidUpstreamCredentialsError("GNANI_API_KEY_ID is not configured.")
 
-        cache_path = self.get_tts_cache_path(text, lang, spk_voice, live_cfg.TTS_MODEL)
+        cache_path = self.get_tts_cache_path(text, lang, spk_voice, live_cfg.GNANI_TTS_MODEL)
         cache_key = str(cache_path)
         cache_lock = self._cache_locks.setdefault(cache_key, asyncio.Lock())
         async with cache_lock:
@@ -182,25 +184,30 @@ class SarvamService:
                 async with aiofiles.open(cache_path, "rb") as f:
                     return await f.read()
 
-            logger.info("TTS synthesis started | voice=%s | language=%s", spk_voice, lang)
-            await self._throttle("tts")
-            url = "https://api.sarvam.ai/text-to-speech"
+            logger.info("Gnani TTS synthesis started | voice=%s | language=%s", spk_voice, lang)
+            url = "https://api.vachana.ai/api/v1/tts/inference"
             headers = {
                 "Content-Type": "application/json",
-                "api-subscription-key": live_cfg.SARVAM_API_KEY.strip(),
+                "X-API-Key-ID": live_cfg.GNANI_API_KEY_ID.strip(),
             }
             payload = {
                 "text": text,
-                "speaker": spk_voice,
-                "model": live_cfg.TTS_MODEL,
-                "language_code": lang,
-                "pace": 1.0,
-                "speech_sample_rate": 16000,
-                "output_audio_codec": "wav",
+                "voice": spk_voice,
+                "model": live_cfg.GNANI_TTS_MODEL,
+                "language": lang,
+                "audio_config": {
+                    "encoding": "linear_pcm",
+                    "container": "wav",
+                    "num_channels": 1,
+                    "sample_rate": 48000,
+                    "sample_width": 2,
+                },
             }
 
             client = await self._client()
-            response = await client.post(url, headers=headers, json=payload, timeout=30.0)
+            async with self._gnani_tts_lock:
+                await self._throttle("tts")
+                response = await client.post(url, headers=headers, json=payload, timeout=45.0)
             if response.status_code in (401, 403):
                 logger.warning("TTS provider rejected configured credential | status=%s", response.status_code)
                 raise InvalidUpstreamCredentialsError("The speech provider rejected the configured API key.")
@@ -217,10 +224,11 @@ class SarvamService:
                 logger.warning("Speech provider returned HTTP %s", response.status_code)
                 raise RuntimeError(f"Speech provider returned HTTP {response.status_code}.")
             try:
-                encoded_audio = response.json()["audios"][0]
-                audio_bytes = base64.b64decode(encoded_audio, validate=True)
-            except (KeyError, IndexError, TypeError, ValueError, binascii.Error) as exc:
-                raise RuntimeError("Speech provider returned an unexpected audio response.") from exc
+                audio_bytes = response.content
+                if not audio_bytes:
+                    raise ValueError("empty audio response")
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("Gnani returned an empty audio response.") from exc
             if not audio_bytes:
                 raise RuntimeError("Speech provider returned an empty audio response.")
 
@@ -240,38 +248,48 @@ class SarvamService:
         self,
         audio_bytes: bytes,
         filename: str = "recording.wav",
-        language: Optional[str] = None,
-    ) -> str:
+        language: Optional[str] = "indic-auto",
+        topic: Optional[str] = None,
+        keyterms: Optional[list[str]] = None,
+    ) -> dict[str, str]:
         live_cfg = settings
-        lang = (language or live_cfg.DEFAULT_LANGUAGE).strip()
+        lang = (language or "indic-auto").strip()
         await self._throttle("stt")
 
-        if not live_cfg.SARVAM_API_KEY.strip():
-            raise InvalidUpstreamCredentialsError("SARVAM_API_KEY is not configured.")
+        if not live_cfg.GNANI_API_KEY_ID.strip():
+            raise InvalidUpstreamCredentialsError("GNANI_API_KEY_ID is not configured.")
 
         client = await self._client()
         response = await client.post(
-            "https://api.sarvam.ai/speech-to-text",
-            headers={"api-subscription-key": live_cfg.SARVAM_API_KEY.strip()},
-            data={"model": live_cfg.SARVAM_STT_MODEL, "language_code": lang},
-            files={"file": (filename, audio_bytes, "audio/wav")},
+            "https://api.vachana.ai/stt/v3",
+            headers={"X-API-Key-ID": live_cfg.GNANI_API_KEY_ID.strip()},
+            data={
+                "model": live_cfg.GNANI_STT_MODEL,
+                "language_code": lang,
+                "format": "codemix",
+                **({"topic": topic[:1600]} if topic else {}),
+                **({"keyterms": json.dumps(keyterms, ensure_ascii=False)} if keyterms else {}),
+            },
+            files={"audio_file": (filename, audio_bytes, "audio/wav")},
             timeout=45.0,
         )
         if response.status_code in (401, 403):
-            raise InvalidUpstreamCredentialsError("Sarvam rejected the configured API key.")
+            raise InvalidUpstreamCredentialsError("Gnani rejected the configured API key.")
         if response.status_code == 429:
-            raise RateLimitExceededError("Sarvam rate limited speech transcription.")
+            raise RateLimitExceededError("Gnani rate limited speech transcription.")
         if response.status_code >= 500:
-            raise RetryableUpstreamError(f"Sarvam returned HTTP {response.status_code}.")
+            raise RetryableUpstreamError(f"Gnani returned HTTP {response.status_code}.")
         if response.is_error:
-            logger.warning("Sarvam STT rejected request | status=%s", response.status_code)
-            raise RuntimeError(f"Sarvam speech transcription returned HTTP {response.status_code}.")
+            logger.warning("Gnani STT rejected request | status=%s", response.status_code)
+            raise RuntimeError(f"Gnani speech transcription returned HTTP {response.status_code}.")
         try:
-            transcript = response.json()["transcript"].strip()
+            result = response.json()
+            transcript = result["transcript"].strip()
         except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("Sarvam returned an unexpected transcription response.") from exc
-        logger.info("STT transcription complete | language=%s | characters=%d", lang, len(transcript))
-        return transcript
+            raise RuntimeError("Gnani returned an unexpected transcription response.") from exc
+        detected_language = str(result.get("detected_language_code") or "en-IN").strip()
+        logger.info("STT transcription complete | detected_language=%s | characters=%d", detected_language, len(transcript))
+        return {"transcript": transcript, "language": detected_language}
 
 
 def _provider_name(url: str) -> str:
@@ -279,4 +297,4 @@ def _provider_name(url: str) -> str:
     return host.lower()
 
 
-sarvam_service = SarvamService()
+speech_service = SpeechService()

@@ -8,7 +8,7 @@ mid-reading, explains the interrupted passage, and resumes from that sentence.
 
 - **Backend:** Python, FastAPI, Uvicorn, Pydantic Settings, `pypdf`
 - **Frontend:** HTML, CSS, vanilla JavaScript ES modules, Web Audio API
-- **Speech:** Sarvam Saaras STT and Bulbul TTS
+- **Speech:** Gnani Prisma v3 speech recognition and Timbre v3 synthesis
 - **Reasoning:** OpenAI-compatible chat-completions API (Groq by default)
 - **Storage:** PostgreSQL book library and reading progress; local TTS cache in
   `assets/audio_cache/`
@@ -17,16 +17,17 @@ mid-reading, explains the interrupted passage, and resumes from that sentence.
 
 | Purpose | Default |
 | --- | --- |
-| Speech-to-text | Sarvam Saaras `saaras:v4` |
-| Text-to-speech | Sarvam Bulbul `bulbul:v3` |
+| Speech-to-text | Gnani Prisma `prisma-v3.0` |
+| Text-to-speech | Gnani Timbre `timbre-v3.0` |
 | Explanation generation | `openai/gpt-oss-120b` on Groq |
 
-Supported doubt languages are English (`en-IN`), Hindi (`hi-IN`), Marathi
-(`mr-IN`), Tamil (`ta-IN`), Telugu (`te-IN`), and Kannada (`kn-IN`).
-Available Sarvam voices are `shubh` (male) and `neha` (female). The selected
-voice is saved in the browser and used for reading, announcements, library
-titles, and doubt answers. Older saved Gnani voice preferences are mapped to
-their Sarvam equivalents.
+Prisma detects speech in English and nine Indian languages: Bengali, Gujarati,
+Hindi, Kannada, Malayalam, Marathi, Punjabi, Tamil, and Telugu. Vani transcribes
+in mixed-script mode, uses the detected language for the tutor answer, and asks
+Timbre to speak that answer in the same language. Timbre voices can speak all
+ten supported languages. The selected speaker is saved in the browser and used
+for reading, announcements, library titles, and doubt answers; older saved
+voice choices migrate to Shubham or Shivani.
 
 ## User flow
 
@@ -35,8 +36,8 @@ their Sarvam equivalents.
 3. Upload a text-based PDF with `U`, or open **My Library** to continue a saved book.
 4. Press `S` to start sentence-by-sentence reading.
 5. Press `Space` to pause and record a doubt; press it again to submit.
-6. Vani transcribes the question, explains it in the selected language, speaks
-   the answer, and restarts the interrupted sentence.
+6. Vani detects the spoken language, explains the question in that language,
+   speaks the answer, and restarts the interrupted sentence.
 
 After sign-in, Vani asks for microphone access so doubt recording can start
 quickly. Once granted, the microphone remains muted and ready while signed in;
@@ -45,13 +46,12 @@ page releases it. Vani plays a soft page-turn sound after each three paragraphs.
 
 Vani opens with a short three-second water sound and ripple animation, then plays
 the spoken introduction. Skipping the introduction leaves reading paused; press `S` to start. Shortcuts: `A`/`D`
-move to the previous or next paragraph, `S` pause/resume, `F` cycle the doubt
-language, `H` replay the spoken guide, `L` open My Library, and `U` upload a PDF. In
+move to the previous or next paragraph, `S` pause/resume, `F` cycle the speaker
+voice, `H` replay the spoken guide, `L` open My Library, and `U` upload a PDF. In
 the reader, use `↑`/`↓` to change reading speed from 0.8× to 1.5× in 0.1× steps;
 the selected speed appears in the live status message. In the library, use `↑`/`↓`
 to cycle through books; Vani speaks the focused title,
-`Enter` opens that book, and `U` starts an upload. Changing the language
-leaves reading paused; press `S` when you are ready to continue. Use the paragraph
+`Enter` opens that book, and `U` starts an upload. Use the paragraph
 slider to jump directly to a paragraph. `←`/`→` jump back or forward 10 seconds
 and briefly play at 2×. `Space` pauses reading to ask or send a doubt.
 
@@ -60,8 +60,8 @@ and briefly play at 2×. `Space` pauses reading to ask or send a doubt.
 ```text
 PDF -> pypdf -> sentence/paragraph chunks -> TTS -> browser playback
 
-Microphone WAV -> Sarvam STT -> contextual LLM explanation
-               -> Sarvam TTS -> browser playback -> resume sentence
+Microphone WAV -> Prisma v3 STT + story context hints -> contextual LLM explanation
+               -> Timbre v3 TTS -> browser playback -> resume sentence
 ```
 
 The API is provided by `backend/main.py`:
@@ -115,7 +115,7 @@ if (!(Test-Path .env)) { Copy-Item .env.example .env }
    `postgresql://vani_app:choose_a_password@127.0.0.1:5432/vani` (URL-encode
    special characters in the password) and set `SESSION_SECRET` to the output
    of `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Add your
-   Sarvam and reasoning-provider API keys as needed.
+   Gnani and reasoning-provider API keys as needed.
 
 Start Vani after saving `.env`:
 
@@ -142,7 +142,7 @@ if [ ! -f .env ]; then cp .env.example .env; fi
 ```
 
 Edit `.env` after copying it. Set `DATABASE_URL` to the PostgreSQL connection
-URL above, paste the generated value into `SESSION_SECRET`, and add the Sarvam
+URL above, paste the generated value into `SESSION_SECRET`, and add the Gnani
 and reasoning-provider API keys as needed. Start Vani after saving `.env`:
 
 ```bash
@@ -159,20 +159,21 @@ Set `SESSION_HTTPS_ONLY=true` when hosting behind HTTPS.
 
 ```dotenv
 DATABASE_URL=postgresql://vani_app:choose_a_password@127.0.0.1:5432/vani
-SARVAM_API_KEY=your_sarvam_key
+GNANI_API_KEY_ID=your_gnani_api_key
 GNANI_EVON_URL=https://api.groq.com/openai/v1/chat/completions
 GROQ_API_KEY=your_groq_key
 LLM_MODEL=openai/gpt-oss-120b
-SARVAM_STT_MODEL=saaras:v4
-TTS_MODEL=bulbul:v3
-DEFAULT_LANGUAGE=en-IN
-DEFAULT_VOICE=shubh
+GNANI_STT_MODEL=prisma-v3.0
+GNANI_TTS_MODEL=timbre-v3.0
+DEFAULT_LANGUAGE=auto
+DEFAULT_VOICE=Avinash
 ```
 
 For another OpenAI-compatible provider, use its endpoint and set
 `LLM_API_KEY` (or `GEMINI_API_KEY` for a Google Generative Language endpoint).
 Never commit `.env` or real API keys.
 
-Sarvam speech requests use the synchronous REST endpoints, which accept
-recordings shorter than 30 seconds. Bulbul returns base64-encoded WAV audio;
-Vani decodes it before caching and playback.
+Gnani speech requests use synchronous REST endpoints for short recordings.
+Prisma receives story titles and passage context to bias recognition toward
+names and terms in the current book. Timbre returns WAV audio, which Vani caches
+and wraps in base64 for browser playback.

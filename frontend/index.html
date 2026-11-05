@@ -89,20 +89,24 @@
     </div>
 
     <div class="header-controls">
-      <div id="langIndicatorCard" class="lang-indicator-card">
-        <span class="control-label">Response Language</span>
-        <span id="activeLangDisplay" aria-live="polite" class="active-lang-value">
-          English / Hinglish (en-IN)
-        </span>
-      </div>
-
-      <!-- Sarvam Bulbul voice selector -->
+      <!-- Timbre v3 supports every listed speaker across all supported languages. -->
       <div class="voice-selector-card">
         <label for="voiceSelect" class="control-label">Voice</label>
         <div class="select-wrapper">
           <select id="voiceSelect" aria-label="Select reading voice" class="voice-select">
-            <option value="shubh">Shubh (Male)</option>
-            <option value="neha">Neha (Female)</option>
+            <option value="Avinash">Avinash (Male)</option>
+            <option value="Shubham">Shubham (Male)</option>
+            <option value="Prakash">Prakash (Male)</option>
+            <option value="Devansh">Devansh (Male)</option>
+            <option value="Yashraj">Yashraj (Male)</option>
+            <option value="Harshad">Harshad (Male)</option>
+            <option value="Shivani">Shivani (Female)</option>
+            <option value="Lakshmi">Lakshmi (Female)</option>
+            <option value="Kalpana">Kalpana (Female)</option>
+            <option value="Chetana">Chetana (Female)</option>
+            <option value="Vasudha">Vasudha (Female)</option>
+            <option value="Riyaa">Riyaa (Female)</option>
+            <option value="Tarika">Tarika (Female)</option>
           </select>
           <svg class="select-chevron" viewBox="0 0 20 20" aria-hidden="true">
             <path d="M5.5 7.5L10 12l4.5-4.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" />
@@ -174,7 +178,7 @@
     <summary>Keyboard help</summary>
     <div class="shortcut-list" aria-label="Keyboard shortcuts">
       <span><kbd>Space</kbd> Skip guide / ask or send a doubt</span><span><kbd>A</kbd>/<kbd>D</kbd> Previous / next paragraph</span>
-      <span><kbd>S</kbd> Pause / play</span><span><kbd>F</kbd> Cycle doubt language</span>
+      <span><kbd>S</kbd> Pause / play</span><span><kbd>F</kbd> Cycle speaker voice</span>
       <span><kbd>H</kbd> Replay intro</span><span><kbd>L</kbd> Open library</span><span><kbd>U</kbd> Upload a PDF</span>
       <span><kbd>R</kbd> Remove a library book (press twice to confirm, Escape to cancel)</span>
       <span><kbd>↑</kbd>/<kbd>↓</kbd> Adjust reading speed (reader)</span>
@@ -260,7 +264,7 @@
       <article class="card output-card" aria-label="Interrupted Doubt and AI Tutor Explanation">
         <div class="card-header">
           <h2 class="section-heading">Your question</h2>
-          <span id="doubtLangBadge" class="lang-mini-badge">en-IN</span>
+          <span id="doubtLangBadge" class="lang-mini-badge">Auto</span>
         </div>
 
         <div id="transcriptContainer" class="transcript-box">
@@ -273,7 +277,7 @@
         <div id="answerContainer" class="formatted-box">
           <span class="box-label-biolum">VANI explains</span>
           <p id="formattedOutputBox" aria-live="polite" class="formatted-output-text">
-            When you ask a doubt, Vani pauses the book, answers clearly in your selected language, and automatically restarts the interrupted sentence.
+            When you ask a doubt, Vani detects your language, answers in the same language, and restarts the interrupted sentence.
           </p>
         </div>
       </article>
@@ -330,7 +334,7 @@
               PRESS SPACE TO INTERRUPT
             </span>
               <span id="micTimer" class="mic-timer">
-              Ask in your language
+              Ask in any supported language
             </span>
           </button>
         </div>

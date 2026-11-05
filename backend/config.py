@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
     SESSION_SECRET: str = ""
     SESSION_HTTPS_ONLY: bool = False
-    SARVAM_API_KEY: str = ""
-    SARVAM_STT_MODEL: str = "saaras:v4"
+    GNANI_API_KEY_ID: str = ""
+    GNANI_STT_MODEL: str = "prisma-v3.0"
     GNANI_EVON_URL: str = "https://api.groq.com/openai/v1/chat/completions"
 
     LLM_API_KEY: str = ""
@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
 
     LLM_MODEL: str = "llama-3.3-70b-versatile"
-    DEFAULT_LANGUAGE: str = "en-IN"
-    DEFAULT_VOICE: str = "shubh"
-    TTS_MODEL: str = "bulbul:v3"
+    DEFAULT_LANGUAGE: str = "auto"
+    DEFAULT_VOICE: str = "Avinash"
+    GNANI_TTS_MODEL: str = "timbre-v3.0"
 
     @field_validator("*", mode="before")
     @classmethod

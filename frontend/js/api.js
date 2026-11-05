@@ -56,7 +56,7 @@ export async function checkLlmConnection() {
   return apiJson("/api/llm-status");
 }
 
-export async function requestTTS(text, language = "en-IN", voice = "shubh") {
+export async function requestTTS(text, language = "auto", voice = "Avinash") {
   const data = await apiJson("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -92,7 +92,6 @@ export async function saveReadingProgress(bookId, paragraphIndex, sentenceIndex)
 export async function submitInterruptedDoubt(
   paragraphIndex,
   sentenceIndex,
-  language,
   voice,
   wavBlob,
   bookId
@@ -100,7 +99,6 @@ export async function submitInterruptedDoubt(
   const formData = new FormData();
   formData.append("paragraph_index", paragraphIndex);
   formData.append("sentence_index", sentenceIndex);
-  formData.append("language", language);
   formData.append("voice", voice);
   if (bookId) formData.append("book_id", bookId);
   formData.append("audio", wavBlob, "doubt.wav");

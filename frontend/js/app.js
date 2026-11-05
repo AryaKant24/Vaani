@@ -1,9 +1,4 @@
-import {
-  LANGUAGES,
-  store,
-  getCurrentLanguage,
-  getCurrentParagraph
-} from "./state.js";
+import { store, getCurrentParagraph } from "./state.js";
 import {
   fetchSessionState,
   checkLlmConnection,
@@ -37,7 +32,6 @@ import {
 import {
   hideWelcomeOverlay,
   setStatusBadge,
-  updateLanguageDisplay,
   renderReaderView,
   updateBookTimestamp,
   setMicButtonState,
@@ -52,6 +46,11 @@ let librarySpeechRequest = 0;
 let pendingLibraryDeletion = null;
 const PARAGRAPHS_PER_PAGE_TURN = 3;
 const VOICE_PREFERENCE_KEY = "vani.selectedVoice";
+const LANGUAGE_NAMES = {
+  "en-IN": "English", "hi-IN": "Hindi", "bn-IN": "Bengali", "gu-IN": "Gujarati",
+  "kn-IN": "Kannada", "ml-IN": "Malayalam", "mr-IN": "Marathi", "pa-IN": "Punjabi",
+  "ta-IN": "Tamil", "te-IN": "Telugu"
+};
 
 window.addEventListener("pagehide", () => {
   void releaseMicCapture();
@@ -162,7 +161,14 @@ function maybePlayOpeningGuide() {
 }
 
 function getSelectedVoice() {
-  return document.getElementById("voiceSelect")?.value || "shubh";
+  return document.getElementById("voiceSelect")?.value || "Avinash";
+}
+
+function cycleVoice() {
+  const voiceSelect = document.getElementById("voiceSelect");
+  if (!voiceSelect?.options.length) return;
+  voiceSelect.selectedIndex = (voiceSelect.selectedIndex + 1) % voiceSelect.options.length;
+  voiceSelect.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function cancelPendingAssistantSpeech() {
@@ -182,7 +188,7 @@ async function getOrFetchSentenceAudio(paraIdx, sentIdx) {
     return store.sentenceAudioCache.get(cacheKey);
   }
 
-  const b64 = await requestTTS(sentences[sentIdx], "en-IN", voice);
+  const b64 = await requestTTS(sentences[sentIdx], "auto", voice);
   store.sentenceAudioCache.set(cacheKey, b64);
   return b64;
 }
@@ -342,27 +348,6 @@ async function replayWelcomeGuide() {
   }, true);
 }
 
-async function cycleLanguage(direction) {
-  if (store.isDoubtFlowActive || store.isDocumentLoading) return;
-  readerPlaybackRequest++;
-  pauseBookStream(0);
-  cancelPendingAssistantSpeech();
-  store.isReadingBook = false;
-  store.isPlayingWelcome = false;
-  store.isBookPausedForDoubt = false;
-
-  store.currentLangIdx =
-    (store.currentLangIdx + direction + LANGUAGES.length) % LANGUAGES.length;
-  updateLanguageDisplay(true);
-  playEarcon(500, 720, 0.1);
-
-  const langObj = getCurrentLanguage();
-  renderReaderView(false);
-  const confirmation = `Language changed to ${langObj.spokenName}. Reading is paused. Press S to resume.`;
-  setStatusBadge(confirmation, "idle");
-  await speakSystemAnnouncement(confirmation);
-}
-
 function setDoubtFlowActive(active) {
   store.isDoubtFlowActive = active;
   if (!active) {
@@ -426,23 +411,22 @@ async function handleSpacebarInterruptOrSend() {
       return;
     }
 
-    const langObj = getCurrentLanguage();
     const voice = getSelectedVoice();
-    setStatusBadge(`Reasoning & Translating Answer into ${langObj.spokenName}...`, "recording");
+    setStatusBadge("Transcribing your question and preparing an answer...", "recording");
 
     try {
       const result = await submitInterruptedDoubt(
         store.currentParagraphIdx,
         store.currentSentenceIdx,
-        langObj.code,
         voice,
         wavBlob,
         store.currentBookId
       );
       if (!store.isDoubtFlowActive) return;
       renderDoubtAnswer(result);
+      const spokenLanguage = result.language_name || LANGUAGE_NAMES[result.language] || result.language;
       setStatusBadge(
-        `Speaking Explanation in ${langObj.spokenName} • Will Restart Sentence ${store.currentSentenceIdx + 1}`,
+        `Speaking in ${spokenLanguage} • Will Restart Sentence ${store.currentSentenceIdx + 1}`,
         "reading"
       );
 
@@ -497,10 +481,9 @@ async function handleSpacebarInterruptOrSend() {
   setDoubtFlowActive(true);
   renderReaderView(false);
 
-  const langObj = getCurrentLanguage();
-  setMicButtonState(true, `Listening in ${langObj.spokenName} • Press Space to Send`);
+  setMicButtonState(true, "Listening in any supported language • Press Space to Send");
   setStatusBadge(
-    `Interrupted Sentence ${store.currentSentenceIdx + 1} • Speak Doubt in ${langObj.spokenName}`,
+    `Interrupted Sentence ${store.currentSentenceIdx + 1} • Speak your doubt in any supported language`,
     "recording"
   );
   try {
@@ -508,7 +491,7 @@ async function handleSpacebarInterruptOrSend() {
       if (!store.isRecordingDoubt || !store.isDoubtFlowActive) return;
       const timerEl = document.getElementById("micTimer");
       if (timerEl) {
-        timerEl.textContent = `Recording (${langObj.code}): ${elapsedSec}s • Press Space to Send`;
+        timerEl.textContent = `Recording (${elapsedSec}s) • Press Space to Send`;
       }
     });
     store.isStartingMicCapture = false;
@@ -628,7 +611,10 @@ function bindUIEvents() {
   if (voiceSelect) {
     try {
       const savedVoice = localStorage.getItem(VOICE_PREFERENCE_KEY);
-      const legacyVoices = { shlok: "shubh", mohan: "shubh", nalini: "neha" };
+      const legacyVoices = {
+        shubh: "Shubham", shlok: "Shubham", mohan: "Shubham",
+        neha: "Shivani", nalini: "Shivani"
+      };
       const normalizedVoice = legacyVoices[savedVoice?.toLowerCase()] || savedVoice;
       const savedOption = [...voiceSelect.options].find((option) => option.value === normalizedVoice);
       if (savedOption) voiceSelect.value = savedOption.value;
@@ -1152,7 +1138,7 @@ function bindKeyboardController() {
       await toggleManualPauseResume();
     } else if (key === "f") {
       event.preventDefault();
-      await cycleLanguage(1);
+      cycleVoice();
     } else if (key === "h") {
       event.preventDefault();
       await replayWelcomeGuide();

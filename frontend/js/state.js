@@ -1,12 +1,3 @@
-export const LANGUAGES = [
-  { code: "en-IN", label: "English / Hinglish (en-IN)", spokenName: "Indian English" },
-  { code: "hi-IN", label: "Hindi (hi-IN)", spokenName: "Hindi" },
-  { code: "mr-IN", label: "Marathi (mr-IN)", spokenName: "Marathi" },
-  { code: "ta-IN", label: "Tamil (ta-IN)", spokenName: "Tamil" },
-  { code: "te-IN", label: "Telugu (te-IN)", spokenName: "Telugu" },
-  { code: "kn-IN", label: "Kannada (kn-IN)", spokenName: "Kannada" }
-];
-
 export const store = {
   appInitialized: false,
   isAuthenticated: false,
@@ -18,7 +9,6 @@ export const store = {
   isDoubtFlowActive: false,
   isPlayingDoubtAnswer: false,
   isDocumentLoading: false,
-  currentLangIdx: 0,
   currentParagraphIdx: 0,
   currentSentenceIdx: 0,
   currentBookId: null,
@@ -30,10 +20,6 @@ export const store = {
     doubt_history: []
   }
 };
-
-export function getCurrentLanguage() {
-  return LANGUAGES[store.currentLangIdx];
-}
 
 export function getCurrentParagraph() {
   const paras = store.serverData.paragraphs || [];
